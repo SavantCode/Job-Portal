@@ -13,7 +13,8 @@ A modern, responsive, and full-stack Job Portal web application built with the M
 
 ---
 <img width="1920" height="1080" alt="Screenshot (2278)" src="https://github.com/user-attachments/assets/a7d4773c-756e-4a9a-ab26-e458b8dd2895" />
-<img width="1920" height="1080" alt="Screenshot (2279)" src="https://github.com/user-attachments/assets/1069c6b4-59d4-447b-9fd3-b5ad657f07ab" />
+<img width="1920" height="1080" alt="Screenshot (2281)" src="https://github.com/user-attachments/assets/0e91cc60-373a-494d-9249-90c79ad75e30" />
+
 
 ##  Key Features
 
