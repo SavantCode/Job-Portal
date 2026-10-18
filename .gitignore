@@ -1,0 +1,30 @@
+# === Dependencies ===
+node_modules/
+
+# === Environment & Secrets ===
+.env
+.env.local
+.env.development.local
+.env.production.local
+
+# === Build Outputs & Bundles ===
+dist/
+build/
+.next/
+out/
+
+# === Logs & Caches ===
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+.eslintcache
+.vite/
+.parcel-cache/
+coverage/
+
+# === Operating System & IDE Files ===
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
