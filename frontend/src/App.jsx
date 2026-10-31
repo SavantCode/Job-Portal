@@ -15,6 +15,7 @@ import EditJob from './components/admin/EditJob'
 import Applicants from './components/admin/Applicants'
 import ProtectedRoute from './components/admin/ProtectedRoute'
 import AICoverLetterGenerator from './components/AICoverLetterGenerator'
+import Notifications from './components/Notifications'
 
 const appRouter = createBrowserRouter([
   {
@@ -44,6 +45,10 @@ const appRouter = createBrowserRouter([
   {
     path: "/profile",
     element: <Profile />
+  },
+  {
+    path: "/notifications",
+    element: <Notifications />
   },
   {
     path: "/ai-cover-letter",
