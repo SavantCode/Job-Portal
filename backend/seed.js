@@ -6,7 +6,7 @@ import { Job } from "./models/job.model.js";         //[cite: 3]
 import { Application } from "./models/application.model.js"; //[cite: 1]
 
 // Your MongoDB connection string
-const MONGO_URI="mongodb+srv://rahulkcoding2023_db_user:Skd6D3LIJSAkhxg9@cluster0.5d7g2pi.mongodb.net/jobPortalData?compressors=zlib"
+const MONGO_URI="currently dummy data fix it later since we are protecting it from ai"
 
 // --- DUMMY DATA SETS ---
 

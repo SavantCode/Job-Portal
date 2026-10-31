@@ -1,19 +1,46 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Button } from '../ui/button'
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
-import { LogOut, User2, ChevronDown } from 'lucide-react'
+import { LogOut, User2, ChevronDown, Bell, CheckCircle2, XCircle, Clock, Sparkles } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useDispatch, useSelector } from 'react-redux'
 import axios from 'axios'
-import { USER_API_END_POINT } from '@/utils/constant'
+import { APPLICATION_API_END_POINT, USER_API_END_POINT } from '@/utils/constant'
 import { setUser } from '@/redux/authSlice'
+import { setAllAppliedJobs } from '@/redux/jobSlice'
 import { toast } from 'sonner'
 
 const Navbar = () => {
     const { user } = useSelector(store => store.auth);
+    const { allAppliedJobs = [] } = useSelector(store => store.job);
     const dispatch = useDispatch();
     const navigate = useNavigate();
+    const [seenCount, setSeenCount] = useState(() => {
+        return Number(localStorage.getItem("seenJobAlertsCount") || 0);
+    });
+
+    // Fetch latest applied jobs for student notifications
+    useEffect(() => {
+        if (user && user.role === 'student') {
+            axios.get(`${APPLICATION_API_END_POINT}/get`, { withCredentials: true })
+                .then(res => {
+                    if (res.data.success) {
+                        dispatch(setAllAppliedJobs(res.data.application));
+                    }
+                })
+                .catch(() => {});
+        }
+    }, [user?._id, user?.role, dispatch]);
+
+    const statusAlerts = (allAppliedJobs || []).filter(app => app?.job);
+    const decisionAlerts = statusAlerts.filter(app => app.status === 'accepted' || app.status === 'rejected');
+    const unreadCount = Math.max(0, decisionAlerts.length - seenCount);
+
+    const handleMarkAlertsSeen = () => {
+        setSeenCount(decisionAlerts.length);
+        localStorage.setItem("seenJobAlertsCount", String(decisionAlerts.length));
+    };
 
     const logoutHandler = async () => {
         try {
@@ -25,9 +52,9 @@ const Navbar = () => {
             }
         } catch (error) {
             console.log(error);
-            toast.error(error.response.data.message);
+            toast.error(error.response?.data?.message || "Logout failed");
         }
-    }
+    };
 
     return (
         <header className='sticky top-0 z-50 bg-white/85 backdrop-blur-md border-b border-gray-100 shadow-xs'>
@@ -42,9 +69,9 @@ const Navbar = () => {
                 </div>
 
                 {/* Nav Links & Actions */}
-                <div className='flex items-center gap-8'>
+                <div className='flex items-center gap-6'>
                     <nav>
-                        <ul className='flex font-medium items-center gap-6 text-gray-600'>
+                        <ul className='flex font-medium items-center gap-6 text-gray-600 text-sm sm:text-base'>
                             {
                                 user && user.role === 'recruiter' ? (
                                     <>
@@ -52,7 +79,7 @@ const Navbar = () => {
                                             <Link to="/admin/companies" className='transition-colors hover:text-[#F83002]'>Companies</Link>
                                         </li>
                                         <li>
-                                            <Link to="/admin/jobs" className='transition-colors hover:text-[#F83002]'>Jobs</Link>
+                                            <Link to="/admin/jobs" className='transition-colors hover:text-[#F83002]'>Jobs & Analytics</Link>
                                         </li>
                                     </>
                                 ) : (
@@ -66,11 +93,85 @@ const Navbar = () => {
                                         <li>
                                             <Link to="/browse" className='transition-colors hover:text-[#F83002]'>Browse</Link>
                                         </li>
+                                        <li>
+                                            <Link to="/ai-cover-letter" className='transition-colors hover:text-[#F83002] flex items-center gap-1'>
+                                                <Sparkles className='w-3.5 h-3.5 text-[#6A38C2]' />
+                                                <span>AI Cover Letter</span>
+                                            </Link>
+                                        </li>
                                     </>
                                 )
                             }
                         </ul>
                     </nav>
+
+                    {/* Job Alerts Notification Bell for Students */}
+                    {user && user.role === 'student' && (
+                        <Popover onOpenChange={(open) => { if (open) handleMarkAlertsSeen(); }}>
+                            <PopoverTrigger asChild>
+                                <button
+                                    type="button"
+                                    className="relative p-2 rounded-full hover:bg-purple-50 text-gray-600 hover:text-[#6A38C2] transition-colors cursor-pointer"
+                                    aria-label="Job Alerts"
+                                >
+                                    <Bell className="w-5 h-5" />
+                                    {unreadCount > 0 && (
+                                        <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-[#F83002] text-white text-[10px] font-bold flex items-center justify-center">
+                                            {unreadCount}
+                                        </span>
+                                    )}
+                                </button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-80 p-0 shadow-xl rounded-2xl border-gray-100 overflow-hidden" align="end">
+                                <div className="px-4 py-3 bg-purple-50/70 border-b border-purple-100 flex items-center justify-between">
+                                    <div>
+                                        <h4 className="font-bold text-sm text-gray-900">Application Alerts</h4>
+                                        <p className="text-[11px] text-gray-500">Live updates on your job applications</p>
+                                    </div>
+                                    <Link to="/profile" className="text-xs font-semibold text-[#6A38C2] hover:underline">
+                                        View All
+                                    </Link>
+                                </div>
+                                <div className="max-h-72 overflow-y-auto divide-y divide-gray-100">
+                                    {statusAlerts.length === 0 ? (
+                                        <div className="p-6 text-center text-xs text-gray-500">
+                                            No application updates yet. Apply to jobs to track status alerts here!
+                                        </div>
+                                    ) : (
+                                        statusAlerts.slice(0, 6).map((item) => (
+                                            <div
+                                                key={item._id}
+                                                onClick={() => navigate(`/description/${item.job?._id}`)}
+                                                className="p-3.5 hover:bg-gray-50 transition-colors cursor-pointer flex items-start gap-3"
+                                            >
+                                                <div className="mt-0.5 shrink-0">
+                                                    {item.status === 'accepted' ? (
+                                                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                                                    ) : item.status === 'rejected' ? (
+                                                        <XCircle className="w-4 h-4 text-red-500" />
+                                                    ) : (
+                                                        <Clock className="w-4 h-4 text-amber-500" />
+                                                    )}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-xs font-semibold text-gray-900 truncate">
+                                                        {item.job?.title} • <span className="text-gray-500 font-normal">{item.job?.company?.name}</span>
+                                                    </p>
+                                                    <p className="text-[11px] text-gray-600 mt-0.5">
+                                                        {item.status === 'accepted'
+                                                            ? "Congratulations! Your application was shortlisted."
+                                                            : item.status === 'rejected'
+                                                            ? "Update: Recruiter has reviewed your application."
+                                                            : "Application submitted and pending review."}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </PopoverContent>
+                        </Popover>
+                    )}
 
                     {
                         !user ? (
@@ -125,8 +226,8 @@ const Navbar = () => {
                                         <div className='flex flex-col gap-1 text-gray-700'>
                                             {
                                                 user && user.role === 'student' && (
-                                                    <Link 
-                                                        to="/profile" 
+                                                    <Link
+                                                        to="/profile"
                                                         className='flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium text-gray-700 hover:text-[#6A38C2]'
                                                     >
                                                         <User2 className='h-4 w-4 text-gray-500' />
@@ -135,9 +236,9 @@ const Navbar = () => {
                                                 )
                                             }
 
-                                            <button 
-                                                onClick={logoutHandler} 
-                                                className='w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors text-sm font-medium text-red-600 text-left'
+                                            <button
+                                                onClick={logoutHandler}
+                                                className='w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors text-sm font-medium text-red-600 text-left cursor-pointer'
                                             >
                                                 <LogOut className='h-4 w-4 text-red-500' />
                                                 <span>Logout</span>
