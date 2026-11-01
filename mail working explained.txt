@@ -1,0 +1,35 @@
+Here is how the email system (backend/utils/mailer.js) works in your project right now. It uses a Dual-Channel + Smart Failover Architecture:
+
+1. In-App Portal Channel (Always Instant)
+Every time a recruiter sends a Shortlist, Assignment, Interview Invite, Offer Letter, or Joining Letter:
+
+It is saved in MongoDB (Application.emailLogs & Notification collection).
+The job seeker immediately sees the alert, meeting link, .ics calendar download, and full letter inside their Notifications & Letters tab (/notifications) and Profile → Applied Jobs table.
+2. Real Email Channel (How Actual Gmail Delivery Works)
+When the backend runs sendEnterpriseEmail(), it checks your backend/.env file and automatically picks one of two modes:
+
+Mode A: Real Gmail Inbox Delivery (When .env has SMTP credentials)
+If you put your SMTP credentials in backend/.env, yes — the email is genuinely delivered straight to the job seeker's real Gmail / Outlook inbox (candidate.email), complete with:
+
+The branded HTML template
+The invite.ics calendar attachment (which triggers the "Add to Google Calendar (Yes / Maybe / No)" banner inside Gmail)
+The attached HTML Offer / Joining Letter
+Reply-To set to the recruiter's email address
+Mode B: Automatic Ethereal Sandbox (When .env does NOT have SMTP credentials yet)
+Because an email server cannot send through Gmail without an authenticated sender account, if SMTP_HOST / SMTP_USER / SMTP_PASS are not in your backend/.env yet:
+
+Instead of failing, nodemailer automatically creates a temporary Ethereal SMTP Sandbox account on the fly.
+It sends the real email + attachments to that sandbox server and returns a previewUrl (https://ethereal.email/message/...).
+You see a "View Live Sent Email" button in the UI so you can test and demo the exact email layout without needing credentials first.
+How to Enable Real Gmail Inbox Delivery (Takes 60 Seconds, 100% Free)
+If you want emails to land in the job seeker's actual Gmail inbox right now:
+
+Go to your Google Account → Security → Enable 2-Step Verification.
+Search for "App Passwords" in your Google Account settings (or visit https://myaccount.google.com/apppasswords).
+Create an App Password named JobPortal — Google will give you a 16-letter code (e.g., abcd efgh ijkl mnop).
+Add these 4 lines to your backend/.env file and restart the backend:
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your_gmail_address@gmail.com
+SMTP_PASS=abcdefghijklmnop
+Once those 4 lines are in backend/.env, getTransporter() in backend/utils/mailer.js automatically switches from "ethereal" to "smtp", and every interview invite, assignment, offer letter, and joining letter will arrive in the candidate's real Gmail inbox within seconds.

@@ -18,7 +18,7 @@ const Login = () => {
         password: "",
         role: "",
     });
-    const { loading,user } = useSelector(store => store.auth);
+    const { loading, user } = useSelector(store => store.auth);
     const navigate = useNavigate();
     const dispatch = useDispatch();
 
@@ -28,6 +28,10 @@ const Login = () => {
 
     const submitHandler = async (e) => {
         e.preventDefault();
+        if (!input.email || !input.password || !input.role) {
+            toast.error("Please enter your email, password, and select your role.");
+            return;
+        }
         try {
             dispatch(setLoading(true));
             const res = await axios.post(`${USER_API_END_POINT}/login`, input, {
@@ -43,21 +47,21 @@ const Login = () => {
             }
         } catch (error) {
             console.log(error);
-            toast.error(error.response.data.message);
+            toast.error(error.response?.data?.message || "Unable to login. Please check your credentials or server connection.");
         } finally {
             dispatch(setLoading(false));
         }
     }
-    useEffect(()=>{
-        if(user){
+    useEffect(() => {
+        if (user) {
             navigate("/");
         }
-    },[])
+    }, [user, navigate])
     return (
         <div>
             <Navbar />
-            <div className='flex items-center justify-center max-w-7xl mx-auto'>
-                <form onSubmit={submitHandler} className='w-1/2 border border-gray-200 rounded-md p-4 my-10'>
+            <div className='flex items-center justify-center max-w-7xl mx-auto px-4'>
+                <form onSubmit={submitHandler} className='w-full sm:w-1/2 border border-gray-200 rounded-md p-4 my-10'>
                     <h1 className='font-bold text-xl mb-5'>Login</h1>
                     <div className='my-2'>
                         <Label>Email</Label>
@@ -67,6 +71,7 @@ const Login = () => {
                             name="email"
                             onChange={changeEventHandler}
                             placeholder="patel@gmail.com"
+                            required
                         />
                     </div>
 
@@ -77,13 +82,15 @@ const Login = () => {
                             value={input.password}
                             name="password"
                             onChange={changeEventHandler}
-                            placeholder="patel@gmail.com"
+                            placeholder="••••••••"
+                            required
                         />
                     </div>
                     <div className='flex items-center justify-between'>
                         <RadioGroup className="flex items-center gap-4 my-5">
                             <div className="flex items-center space-x-2">
                                 <Input
+                                    id="login-student"
                                     type="radio"
                                     name="role"
                                     value="student"
@@ -91,10 +98,11 @@ const Login = () => {
                                     onChange={changeEventHandler}
                                     className="cursor-pointer"
                                 />
-                                <Label htmlFor="r1">Student</Label>
+                                <Label htmlFor="login-student" className="cursor-pointer">Student</Label>
                             </div>
                             <div className="flex items-center space-x-2">
                                 <Input
+                                    id="login-recruiter"
                                     type="radio"
                                     name="role"
                                     value="recruiter"
@@ -102,12 +110,12 @@ const Login = () => {
                                     onChange={changeEventHandler}
                                     className="cursor-pointer"
                                 />
-                                <Label htmlFor="r2">Recruiter</Label>
+                                <Label htmlFor="login-recruiter" className="cursor-pointer">Recruiter</Label>
                             </div>
                         </RadioGroup>
                     </div>
                     {
-                        loading ? <Button className="w-full my-4"> <Loader2 className='mr-2 h-4 w-4 animate-spin' /> Please wait </Button> : <Button type="submit" className="w-full my-4">Login</Button>
+                        loading ? <Button disabled className="w-full my-4"> <Loader2 className='mr-2 h-4 w-4 animate-spin' /> Please wait </Button> : <Button type="submit" className="w-full my-4">Login</Button>
                     }
                     <span className='text-sm'>Don't have an account? <Link to="/signup" className='text-blue-600'>Signup</Link></span>
                 </form>

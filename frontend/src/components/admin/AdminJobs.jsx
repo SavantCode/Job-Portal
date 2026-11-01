@@ -20,7 +20,7 @@ const AdminJobs = () => {
         dispatch(setSearchJobByText(input));
     }, [input, dispatch]);
 
-    // Compute Recruiter Analytics Summary
+    // Compute Recruiter Analytics Summary using multi-stage hiringStage + status
     const stats = useMemo(() => {
         let totalApplicants = 0;
         let accepted = 0;
@@ -32,9 +32,21 @@ const AdminJobs = () => {
             totalApplicants += apps.length;
             apps.forEach(app => {
                 if (typeof app === 'object') {
-                    if (app.status === 'accepted') accepted++;
-                    else if (app.status === 'rejected') rejected++;
-                    else pending++;
+                    const stage = app.hiringStage || "";
+                    if (
+                        stage === 'rejected' ||
+                        stage === 'offer_declined' ||
+                        app.status === 'rejected'
+                    ) {
+                        rejected++;
+                    } else if (
+                        ['shortlisted', 'assignment_sent', 'interview_scheduled', 'interview_passed', 'offer_sent', 'offer_accepted', 'hired'].includes(stage) ||
+                        app.status === 'accepted'
+                    ) {
+                        accepted++;
+                    } else {
+                        pending++;
+                    }
                 } else {
                     pending++;
                 }
@@ -90,7 +102,7 @@ const AdminJobs = () => {
                                 <CheckCircle2 className='w-6 h-6' />
                             </div>
                             <div>
-                                <p className='text-xs text-gray-500 font-medium'>Shortlisted / Accepted</p>
+                                <p className='text-xs text-gray-500 font-medium'>Shortlisted / In Pipeline</p>
                                 <h3 className='text-2xl font-extrabold text-gray-900'>
                                     {stats.accepted} <span className='text-xs font-semibold text-emerald-600'>({stats.conversionRate}%)</span>
                                 </h3>

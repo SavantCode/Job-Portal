@@ -1,5 +1,11 @@
 import mongoose from "mongoose";
 
+/**
+ * Notification Schema
+ * Supports two-way real-time alerts for both Candidates (Students) and Recruiters:
+ * - Candidate alerts: shortlisted, assignment, interview, interview_passed, offer_letter, joining_letter, rejected
+ * - Recruiter alerts: new_application, assignment_submitted, offer_accepted, offer_declined
+ */
 const notificationSchema = new mongoose.Schema({
     recipient: {
         type: mongoose.Schema.Types.ObjectId,
@@ -21,11 +27,15 @@ const notificationSchema = new mongoose.Schema({
     type: {
         type: String,
         enum: [
+            'new_application',
             'shortlisted',
             'assignment',
+            'assignment_submitted',
             'interview',
             'interview_passed',
             'offer_letter',
+            'offer_accepted',
+            'offer_declined',
             'joining_letter',
             'rejected',
             'status_update'

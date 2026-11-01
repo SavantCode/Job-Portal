@@ -20,10 +20,12 @@ const Job = ({ job }) => {
 
     useEffect(() => {
         if (user?.savedJobs) {
-            const checkIfSaved = user.savedJobs.some(savedId => 
+            const checkIfSaved = user.savedJobs.some(savedId =>
                 (typeof savedId === 'object' ? savedId?._id === job?._id : savedId === job?._id)
             );
             setIsSaved(checkIfSaved);
+        } else {
+            setIsSaved(false);
         }
     }, [user, job?._id]);
 
@@ -39,26 +41,29 @@ const Job = ({ job }) => {
 
     // Handler to toggle save/unsave job
     const saveJobHandler = async () => {
+        if (!user) {
+            toast.error("Please login to save jobs for later.");
+            navigate("/login");
+            return;
+        }
         try {
             setLoading(true);
             const res = await axios.post(`${USER_API_END_POINT}/job/save/${job?._id}`, {}, { withCredentials: true });
-            
+
             if (res.data.success) {
                 setIsSaved(res.data.saved);
                 toast.success(res.data.message);
 
                 // Update Redux global user state immediately so Profile & other components sync
-                if (user) {
-                    let updatedSavedJobs = [...(user.savedJobs || [])];
-                    if (res.data.saved) {
-                        updatedSavedJobs.push(job?._id);
-                    } else {
-                        updatedSavedJobs = updatedSavedJobs.filter(id => 
-                            (typeof id === 'object' ? id?._id !== job?._id : id !== job?._id)
-                        );
-                    }
-                    dispatch(setUser({ ...user, savedJobs: updatedSavedJobs }));
+                let updatedSavedJobs = [...(user.savedJobs || [])];
+                if (res.data.saved) {
+                    updatedSavedJobs.push(job?._id);
+                } else {
+                    updatedSavedJobs = updatedSavedJobs.filter(id =>
+                        (typeof id === 'object' ? id?._id !== job?._id : id !== job?._id)
+                    );
                 }
+                dispatch(setUser({ ...user, savedJobs: updatedSavedJobs }));
             }
         } catch (error) {
             console.log(error);
@@ -79,11 +84,11 @@ const Job = ({ job }) => {
                     <span className='text-xs font-medium text-gray-400 bg-gray-50 px-2.5 py-1 rounded-md'>
                         {daysAgo === 0 ? "Today" : `${daysAgo} days ago`}
                     </span>
-                    <Button 
+                    <Button
                         onClick={saveJobHandler}
                         disabled={loading}
-                        variant="ghost" 
-                        size="icon" 
+                        variant="ghost"
+                        size="icon"
                         className={`h-8 w-8 rounded-full transition-colors ${isSaved ? 'text-[#6A38C2] bg-purple-50' : 'text-gray-400 hover:text-[#6A38C2] hover:bg-purple-50'}`}
                     >
                         <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-[#6A38C2]' : ''}`} />
@@ -137,14 +142,14 @@ const Job = ({ job }) => {
 
                 {/* Action Buttons */}
                 <div className='flex items-center gap-3'>
-                    <Button 
-                        onClick={() => navigate(`/description/${job?._id}`)} 
-                        variant="outline" 
+                    <Button
+                        onClick={() => navigate(`/description/${job?._id}`)}
+                        variant="outline"
                         className="flex-1 rounded-xl border-gray-200 hover:bg-gray-50 hover:text-gray-900 font-medium cursor-pointer"
                     >
                         Details
                     </Button>
-                    <Button 
+                    <Button
                         onClick={saveJobHandler}
                         disabled={loading}
                         className={`flex-1 rounded-xl font-medium shadow-xs text-white cursor-pointer ${isSaved ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-[#7209b7] hover:bg-[#5b0792]'}`}

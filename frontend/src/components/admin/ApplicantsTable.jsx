@@ -3,7 +3,7 @@ import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, Tabl
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import {
     FileText, ExternalLink, Eye, Sparkles, Mail, Calendar, Send,
-    CheckCircle2, XCircle, ClipboardList, Award, Building2, Loader2, ArrowRight
+    CheckCircle2, XCircle, ClipboardList, Award, Building2, Loader2, Download, Printer, ShieldCheck
 } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
 import { toast } from 'sonner';
@@ -14,6 +14,11 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { setAllApplicants } from '@/redux/applicationSlice';
+import { printA4Letterhead } from '@/utils/printDocument';
+
+const isRestrictedCloudinaryPdf = (url = "") => {
+    return typeof url === "string" && url.includes("res.cloudinary.com") && url.includes("/image/upload/") && url.endsWith(".pdf");
+};
 
 const STAGE_META = {
     applied: { label: "Applied (Pending)", color: "bg-gray-100 text-gray-700 border-gray-200" },
@@ -22,15 +27,12 @@ const STAGE_META = {
     interview_scheduled: { label: "3. Interview Scheduled", color: "bg-purple-50 text-[#6A38C2] border-purple-200" },
     interview_passed: { label: "4. Interview Cleared", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
     offer_sent: { label: "5. Offer Letter Sent", color: "bg-teal-50 text-teal-800 border-teal-200" },
+    offer_accepted: { label: "5B. Offer Accepted ✍️", color: "bg-emerald-100 text-emerald-900 border-emerald-300" },
+    offer_declined: { label: "Offer Declined", color: "bg-amber-50 text-amber-800 border-amber-200" },
     hired: { label: "6. Joining Letter Issued", color: "bg-green-100 text-green-800 border-green-300" },
     rejected: { label: "Rejected", color: "bg-red-50 text-red-700 border-red-200" }
 };
 
-/**
- * Returns available next hiring pipeline actions based on current candidate stage
- * Enforces sequential hiring logic:
- * Accept Application -> Assignment / Schedule Interview -> Next Interview Round / Pass Interview -> Offer Letter -> Joining Letter
- */
 const getAvailableStageActions = (item) => {
     const stage = item?.hiringStage || (item?.status === 'accepted' ? 'shortlisted' : item?.status === 'rejected' ? 'rejected' : 'applied');
     const round = item?.currentRound || 0;
@@ -67,7 +69,7 @@ const getAvailableStageActions = (item) => {
         ];
     }
 
-    if (stage === "offer_sent") {
+    if (stage === "offer_sent" || stage === "offer_accepted" || stage === "offer_declined") {
         return [
             { key: "joining_letter", label: "Send Official Joining Letter", icon: Building2, primary: true },
             { key: "offer_letter", label: "Resend / Revise Offer Letter", icon: Award }
@@ -95,7 +97,6 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
 
     const [selectedCandidate, setSelectedCandidate] = useState(null);
 
-    // Hiring Pipeline Studio Modal State
     const [studioCandidate, setStudioCandidate] = useState(null);
     const [actionType, setActionType] = useState("shortlist");
     const [subject, setSubject] = useState("");
@@ -105,7 +106,9 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
     const [sendingAction, setSendingAction] = useState(false);
     const [lastPreviewUrl, setLastPreviewUrl] = useState("");
 
-    // Stage-Specific Form Inputs
+    // Branded A4 Letterhead Print Modal State (For Recruiter)
+    const [letterheadData, setLetterheadData] = useState(null);
+
     const [interviewForm, setInterviewForm] = useState({
         roundName: "Round 1: Technical Interview",
         roundNumber: 1,
@@ -139,6 +142,32 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
         workMode: "Hybrid",
         documentsRequired: "Aadhaar/Passport, PAN Card, Educational Certificates, Previous Relieving Letters, Bank Account Details"
     });
+
+    // Helper to open the Recruiter A4 Letterhead Preview & Print Modal
+    const openRecruiterLetterhead = (candidateItem, type = "offer", useLiveStudioForm = false) => {
+        const offerSnapshot = useLiveStudioForm
+            ? { ...offerForm, letterContent: body }
+            : (candidateItem?.offerDetails || { ...offerForm, letterContent: body });
+
+        const joiningSnapshot = useLiveStudioForm
+            ? { ...joiningForm, letterContent: body }
+            : (candidateItem?.joiningDetails || { ...joiningForm, letterContent: body });
+
+        setLetterheadData({
+            type, // "offer" | "joining"
+            appId: candidateItem?._id || "DRAFT",
+            candidateName: candidateItem?.applicant?.fullname || "Candidate",
+            candidateEmail: candidateItem?.applicant?.email || "",
+            candidatePhone: candidateItem?.applicant?.phoneNumber || "",
+            candidateSignature: candidateItem?.offerDetails?.candidateSignature || "",
+            jobTitle: applicants?.title || "Software Engineer",
+            companyName: applicants?.company?.name || "Enterprise Corporation",
+            companyLogo: applicants?.company?.logo || "",
+            companyLocation: applicants?.location || "Bengaluru",
+            offerDetails: offerSnapshot,
+            joiningDetails: joiningSnapshot
+        });
+    };
 
     const openHiringStudio = async (item, chosenAction) => {
         setStudioCandidate(item);
@@ -233,7 +262,6 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                     setLastPreviewUrl(res.data.previewUrl);
                 }
 
-                // Update Redux state with updated application
                 if (applicants?.applications) {
                     const updatedApps = applicants.applications.map(app =>
                         app._id === studioCandidate._id ? { ...res.data.application, applicant: studioCandidate.applicant } : app
@@ -256,8 +284,20 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
     const filteredApplications = useMemo(() => {
         const list = applicants?.applications || [];
         return list.filter(item => {
-            const st = (item?.status || "pending").toLowerCase();
-            if (statusFilter !== "all" && st !== statusFilter) return false;
+            const stage = item?.hiringStage || (item?.status === 'accepted' ? 'shortlisted' : item?.status === 'rejected' ? 'rejected' : 'applied');
+
+            if (statusFilter && statusFilter !== "all") {
+                if (statusFilter === "interview_scheduled") {
+                    if (stage !== "interview_scheduled" && stage !== "interview_passed") return false;
+                } else if (statusFilter === "offer_stage") {
+                    if (!["offer_sent", "offer_accepted", "offer_declined"].includes(stage)) return false;
+                } else if (["pending", "accepted", "rejected"].includes(statusFilter)) {
+                    const rawStatus = (item?.status || "pending").toLowerCase();
+                    if (rawStatus !== statusFilter) return false;
+                } else if (stage !== statusFilter) {
+                    return false;
+                }
+            }
 
             if (skillQuery.trim()) {
                 const q = skillQuery.trim().toLowerCase();
@@ -288,7 +328,7 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                         filteredApplications.length === 0 ? (
                             <TableRow>
                                 <TableCell colSpan={5} className="text-center py-8 text-gray-500">
-                                    No applicants match the current filters.
+                                    No applicants match the current stage or skill filter.
                                 </TableCell>
                             </TableRow>
                         ) : filteredApplications.map((item) => {
@@ -312,6 +352,11 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                                                 <ExternalLink className="w-2.5 h-2.5" />
                                             </a>
                                         )}
+                                        {item?.offerDetails?.responseStatus === 'accepted' && (
+                                            <div className="text-[11px] font-bold text-emerald-700 mt-1">
+                                                ✍️ Signed by: {item.offerDetails.candidateSignature}
+                                            </div>
+                                        )}
                                     </TableCell>
 
                                     <TableCell>
@@ -329,7 +374,7 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                                     </TableCell>
 
                                     <TableCell>
-                                        <div className="flex items-center gap-1.5">
+                                        <div className="flex flex-wrap items-center gap-1.5">
                                             <Button
                                                 type="button"
                                                 variant="outline"
@@ -344,14 +389,38 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                                     </TableCell>
 
                                     <TableCell>
-                                        <Badge className={`border font-semibold text-xs px-2.5 py-1 rounded-lg ${stageInfo.color}`}>
-                                            {stageInfo.label}
-                                        </Badge>
-                                        {item?.interviewDetails?.date && stageKey === 'interview_scheduled' && (
-                                            <div className="text-[11px] text-gray-500 mt-1">
-                                                📅 {item.interviewDetails.roundName}: {item.interviewDetails.date} ({item.interviewDetails.time})
+                                        <div className="space-y-1.5">
+                                            <Badge className={`border font-semibold text-xs px-2.5 py-1 rounded-lg ${stageInfo.color}`}>
+                                                {stageInfo.label}
+                                            </Badge>
+                                            {item?.interviewDetails?.date && stageKey === 'interview_scheduled' && (
+                                                <div className="text-[11px] text-gray-500">
+                                                    📅 {item.interviewDetails.roundName}: {item.interviewDetails.date} ({item.interviewDetails.time})
+                                                </div>
+                                            )}
+
+                                            {/* Quick 1-Click A4 Letterhead Print Buttons for Recruiter */}
+                                            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                                                {item?.offerDetails?.ctc && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openRecruiterLetterhead(item, "offer", false)}
+                                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-[10px] font-bold cursor-pointer"
+                                                    >
+                                                        <Printer className="w-3 h-3" /> A4 Offer PDF
+                                                    </button>
+                                                )}
+                                                {item?.joiningDetails?.joiningDate && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openRecruiterLetterhead(item, "joining", false)}
+                                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-green-50 hover:bg-green-100 text-green-800 border border-green-200 text-[10px] font-bold cursor-pointer"
+                                                    >
+                                                        <Printer className="w-3 h-3" /> A4 Joining PDF
+                                                    </button>
+                                                )}
                                             </div>
-                                        )}
+                                        </div>
                                     </TableCell>
 
                                     <TableCell className="text-right">
@@ -419,7 +488,6 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                                 </div>
                             )}
 
-                            {/* Sent Emails & Letters Audit Trail */}
                             {selectedCandidate.emailLogs?.length > 0 && (
                                 <div className="space-y-2">
                                     <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">
@@ -431,6 +499,15 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                                                 <div className="flex items-center justify-between">
                                                     <span className="font-semibold text-xs text-gray-900">{log.subject}</span>
                                                     <div className="flex items-center gap-2">
+                                                        {(log.actionType === "offer_letter" || log.actionType === "joining_letter") && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openRecruiterLetterhead(selectedCandidate, log.actionType === "joining_letter" ? "joining" : "offer", false)}
+                                                                className="text-[11px] font-bold text-teal-700 hover:underline flex items-center gap-1 cursor-pointer"
+                                                            >
+                                                                <Printer className="w-3 h-3" /> Print A4 Letterhead
+                                                            </button>
+                                                        )}
                                                         <Badge variant="outline" className="text-[10px] uppercase">{log.actionType}</Badge>
                                                         {log.previewUrl && (
                                                             <a
@@ -451,34 +528,46 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                                 </div>
                             )}
 
-                            {/* Resume Preview */}
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between">
                                     <span className="text-xs font-bold text-gray-700 flex items-center gap-1.5">
                                         <FileText className="w-4 h-4 text-[#6A38C2]" />
-                                        Resume ({selectedCandidate.applicant?.profile?.resumeOriginalName || "Document"})
+                                        Resume ({selectedCandidate.applicant?.profile?.resumeOriginalName || "Candidate CV"})
                                     </span>
-                                    {selectedCandidate.applicant?.profile?.resume && (
+                                    {selectedCandidate.applicant?.profile?.resume?.startsWith("data:application/pdf") && (
                                         <a
                                             href={selectedCandidate.applicant.profile.resume}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
+                                            download={selectedCandidate.applicant?.profile?.resumeOriginalName || "Candidate_Resume.pdf"}
                                             className="text-xs font-semibold text-[#6A38C2] hover:underline flex items-center gap-1"
                                         >
-                                            Open Full Tab <ExternalLink className="w-3 h-3" />
+                                            <Download className="w-3.5 h-3.5" /> Download PDF
                                         </a>
                                     )}
                                 </div>
 
-                                {selectedCandidate.applicant?.profile?.resume ? (
+                                {selectedCandidate.applicant?.profile?.resume && !isRestrictedCloudinaryPdf(selectedCandidate.applicant.profile.resume) ? (
                                     <iframe
                                         src={selectedCandidate.applicant.profile.resume}
                                         title="Candidate Resume Preview"
                                         className="w-full h-72 rounded-xl border border-gray-200 bg-gray-50"
                                     />
                                 ) : (
-                                    <div className="p-6 text-center bg-gray-50 rounded-xl border border-dashed border-gray-200 text-xs text-gray-400">
-                                        Candidate has not uploaded a PDF resume yet.
+                                    <div className="p-5 bg-white rounded-xl border border-gray-200 space-y-3 text-xs">
+                                        <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
+                                            <div>
+                                                <p className="font-bold text-sm text-gray-900">{selectedCandidate.applicant?.fullname}</p>
+                                                <p className="text-gray-500">{selectedCandidate.applicant?.email} • {selectedCandidate.applicant?.phoneNumber}</p>
+                                            </div>
+                                            <Badge className="bg-purple-50 text-[#6A38C2] border-purple-200">Verified Candidate CV</Badge>
+                                        </div>
+                                        <p className="text-gray-700 leading-relaxed">
+                                            {selectedCandidate.applicant?.profile?.bio || "Experienced software engineering candidate with strong full-stack fundamentals."}
+                                        </p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {(selectedCandidate.applicant?.profile?.skills || []).map((s, idx) => (
+                                                <Badge key={idx} variant="secondary" className="text-[10px]">{s}</Badge>
+                                            ))}
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -501,7 +590,6 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
 
                     {studioCandidate && (
                         <form onSubmit={handleExecuteHiringAction} className="space-y-5 text-sm">
-                            {/* Stage Action Switcher */}
                             <div className="bg-purple-50/60 p-3.5 rounded-2xl border border-purple-100 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex flex-wrap items-center gap-1.5">
                                     {[
@@ -544,7 +632,6 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                                 </Button>
                             </div>
 
-                            {/* Conditional Stage Form Fields */}
                             {actionType === "interview" && (
                                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 rounded-2xl bg-emerald-50/50 border border-emerald-200">
                                     <div className="sm:col-span-2">
@@ -657,94 +744,125 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                             )}
 
                             {actionType === "offer_letter" && (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-2xl bg-teal-50/60 border border-teal-200">
-                                    <div>
-                                        <Label className="text-xs font-semibold">Offered Annual CTC *</Label>
-                                        <Input
-                                            value={offerForm.ctc}
-                                            onChange={(e) => setOfferForm({ ...offerForm, ctc: e.target.value })}
-                                            placeholder="e.g. 14.5 LPA"
-                                            className="h-9 text-xs bg-white mt-1"
-                                            required
-                                        />
+                                <div className="p-4 rounded-2xl bg-teal-50/60 border border-teal-200 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-xs font-extrabold uppercase tracking-wider text-teal-900 flex items-center gap-1.5">
+                                            <Award className="w-4 h-4" /> Official Offer Letter Configuration
+                                        </span>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => openRecruiterLetterhead(studioCandidate, "offer", true)}
+                                            className="h-8 text-xs rounded-xl bg-white border-teal-300 text-teal-900 hover:bg-teal-100 font-semibold cursor-pointer"
+                                        >
+                                            <Printer className="w-3.5 h-3.5 mr-1.5" /> Preview / Print A4 Letterhead
+                                        </Button>
                                     </div>
-                                    <div>
-                                        <Label className="text-xs font-semibold">Proposed Joining Date *</Label>
-                                        <Input
-                                            type="date"
-                                            value={offerForm.joiningDate}
-                                            onChange={(e) => setOfferForm({ ...offerForm, joiningDate: e.target.value })}
-                                            className="h-9 text-xs bg-white mt-1"
-                                            required
-                                        />
-                                    </div>
-                                    <div>
-                                        <Label className="text-xs font-semibold">Work Location</Label>
-                                        <Input
-                                            value={offerForm.location}
-                                            onChange={(e) => setOfferForm({ ...offerForm, location: e.target.value })}
-                                            className="h-9 text-xs bg-white mt-1"
-                                        />
-                                    </div>
-                                    <div>
-                                        <Label className="text-xs font-semibold">Perks & Benefits</Label>
-                                        <Input
-                                            value={offerForm.benefits}
-                                            onChange={(e) => setOfferForm({ ...offerForm, benefits: e.target.value })}
-                                            className="h-9 text-xs bg-white mt-1"
-                                        />
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div>
+                                            <Label className="text-xs font-semibold">Offered Annual CTC *</Label>
+                                            <Input
+                                                value={offerForm.ctc}
+                                                onChange={(e) => setOfferForm({ ...offerForm, ctc: e.target.value })}
+                                                placeholder="e.g. 14.5 LPA"
+                                                className="h-9 text-xs bg-white mt-1"
+                                                required
+                                            />
+                                        </div>
+                                        <div>
+                                            <Label className="text-xs font-semibold">Proposed Joining Date *</Label>
+                                            <Input
+                                                type="date"
+                                                value={offerForm.joiningDate}
+                                                onChange={(e) => setOfferForm({ ...offerForm, joiningDate: e.target.value })}
+                                                className="h-9 text-xs bg-white mt-1"
+                                                required
+                                            />
+                                        </div>
+                                        <div>
+                                            <Label className="text-xs font-semibold">Work Location</Label>
+                                            <Input
+                                                value={offerForm.location}
+                                                onChange={(e) => setOfferForm({ ...offerForm, location: e.target.value })}
+                                                className="h-9 text-xs bg-white mt-1"
+                                            />
+                                        </div>
+                                        <div>
+                                            <Label className="text-xs font-semibold">Perks & Benefits</Label>
+                                            <Input
+                                                value={offerForm.benefits}
+                                                onChange={(e) => setOfferForm({ ...offerForm, benefits: e.target.value })}
+                                                className="h-9 text-xs bg-white mt-1"
+                                            />
+                                        </div>
                                     </div>
                                 </div>
                             )}
 
                             {actionType === "joining_letter" && (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-2xl bg-green-50/60 border border-green-200">
-                                    <div>
-                                        <Label className="text-xs font-semibold">Official Joining Date *</Label>
-                                        <Input
-                                            type="date"
-                                            value={joiningForm.joiningDate}
-                                            onChange={(e) => setJoiningForm({ ...joiningForm, joiningDate: e.target.value })}
-                                            className="h-9 text-xs bg-white mt-1"
-                                            required
-                                        />
+                                <div className="p-4 rounded-2xl bg-green-50/60 border border-green-200 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-xs font-extrabold uppercase tracking-wider text-green-900 flex items-center gap-1.5">
+                                            <Building2 className="w-4 h-4" /> Official Joining & Appointment Letter Configuration
+                                        </span>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => openRecruiterLetterhead(studioCandidate, "joining", true)}
+                                            className="h-8 text-xs rounded-xl bg-white border-green-300 text-green-900 hover:bg-green-100 font-semibold cursor-pointer"
+                                        >
+                                            <Printer className="w-3.5 h-3.5 mr-1.5" /> Preview / Print A4 Letterhead
+                                        </Button>
                                     </div>
-                                    <div>
-                                        <Label className="text-xs font-semibold">Reporting Time</Label>
-                                        <Input
-                                            value={joiningForm.reportingTime}
-                                            onChange={(e) => setJoiningForm({ ...joiningForm, reportingTime: e.target.value })}
-                                            className="h-9 text-xs bg-white mt-1"
-                                        />
-                                    </div>
-                                    <div>
-                                        <Label className="text-xs font-semibold">Reporting Manager</Label>
-                                        <Input
-                                            value={joiningForm.reportingManager}
-                                            onChange={(e) => setJoiningForm({ ...joiningForm, reportingManager: e.target.value })}
-                                            className="h-9 text-xs bg-white mt-1"
-                                        />
-                                    </div>
-                                    <div>
-                                        <Label className="text-xs font-semibold">Work Mode</Label>
-                                        <Input
-                                            value={joiningForm.workMode}
-                                            onChange={(e) => setJoiningForm({ ...joiningForm, workMode: e.target.value })}
-                                            className="h-9 text-xs bg-white mt-1"
-                                        />
-                                    </div>
-                                    <div className="sm:col-span-2">
-                                        <Label className="text-xs font-semibold">Mandatory Onboarding Documents</Label>
-                                        <Input
-                                            value={joiningForm.documentsRequired}
-                                            onChange={(e) => setJoiningForm({ ...joiningForm, documentsRequired: e.target.value })}
-                                            className="h-9 text-xs bg-white mt-1"
-                                        />
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div>
+                                            <Label className="text-xs font-semibold">Official Joining Date *</Label>
+                                            <Input
+                                                type="date"
+                                                value={joiningForm.joiningDate}
+                                                onChange={(e) => setJoiningForm({ ...joiningForm, joiningDate: e.target.value })}
+                                                className="h-9 text-xs bg-white mt-1"
+                                                required
+                                            />
+                                        </div>
+                                        <div>
+                                            <Label className="text-xs font-semibold">Reporting Time</Label>
+                                            <Input
+                                                value={joiningForm.reportingTime}
+                                                onChange={(e) => setJoiningForm({ ...joiningForm, reportingTime: e.target.value })}
+                                                className="h-9 text-xs bg-white mt-1"
+                                            />
+                                        </div>
+                                        <div>
+                                            <Label className="text-xs font-semibold">Reporting Manager</Label>
+                                            <Input
+                                                value={joiningForm.reportingManager}
+                                                onChange={(e) => setJoiningForm({ ...joiningForm, reportingManager: e.target.value })}
+                                                className="h-9 text-xs bg-white mt-1"
+                                            />
+                                        </div>
+                                        <div>
+                                            <Label className="text-xs font-semibold">Work Mode</Label>
+                                            <Input
+                                                value={joiningForm.workMode}
+                                                onChange={(e) => setJoiningForm({ ...joiningForm, workMode: e.target.value })}
+                                                className="h-9 text-xs bg-white mt-1"
+                                            />
+                                        </div>
+                                        <div className="sm:col-span-2">
+                                            <Label className="text-xs font-semibold">Mandatory Onboarding Documents</Label>
+                                            <Input
+                                                value={joiningForm.documentsRequired}
+                                                onChange={(e) => setJoiningForm({ ...joiningForm, documentsRequired: e.target.value })}
+                                                className="h-9 text-xs bg-white mt-1"
+                                            />
+                                        </div>
                                     </div>
                                 </div>
                             )}
 
-                            {/* Email / Letter Subject & Body */}
                             <div className="space-y-3">
                                 <div>
                                     <Label className="text-xs font-semibold text-gray-700">Email / Letter Subject Line</Label>
@@ -769,7 +887,6 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                                 </div>
                             </div>
 
-                            {/* AI Suggested Interview Questions for Recruiter */}
                             {actionType === "interview" && suggestedQuestions.length > 0 && (
                                 <div className="p-3.5 rounded-2xl bg-gray-50 border border-gray-200 space-y-1.5">
                                     <p className="text-[11px] font-bold text-[#6A38C2] uppercase">
@@ -783,7 +900,6 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                                 </div>
                             )}
 
-                            {/* Live Ethereal Email Preview Banner */}
                             {lastPreviewUrl && (
                                 <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
                                     <div className="space-y-0.5">
@@ -806,23 +922,166 @@ const ApplicantsTable = ({ skillQuery = "", statusFilter = "all" }) => {
                                 </div>
                             )}
 
-                            <DialogFooter className="gap-2">
-                                <Button type="button" variant="outline" onClick={() => setStudioCandidate(null)} className="rounded-xl">
-                                    Close
-                                </Button>
-                                <Button
-                                    type="submit"
-                                    disabled={sendingAction || draftingAI}
-                                    className="rounded-xl bg-[#6A38C2] hover:bg-[#5b30a6] text-white font-semibold cursor-pointer"
-                                >
-                                    {sendingAction ? (
-                                        <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Dispatching Email & Updating Stage...</>
-                                    ) : (
-                                        <><Send className="w-4 h-4 mr-1.5" /> Confirm & Send to Candidate</>
+                            <DialogFooter className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                    {(actionType === "offer_letter" || actionType === "joining_letter") && (
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() => openRecruiterLetterhead(studioCandidate, actionType === "joining_letter" ? "joining" : "offer", true)}
+                                            className="rounded-xl border-purple-200 text-[#6A38C2] text-xs font-semibold cursor-pointer"
+                                        >
+                                            <Printer className="w-4 h-4 mr-1.5" /> Open Branded A4 Letterhead / PDF
+                                        </Button>
                                     )}
-                                </Button>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <Button type="button" variant="outline" onClick={() => setStudioCandidate(null)} className="rounded-xl">
+                                        Close
+                                    </Button>
+                                    <Button
+                                        type="submit"
+                                        disabled={sendingAction || draftingAI}
+                                        className="rounded-xl bg-[#6A38C2] hover:bg-[#5b30a6] text-white font-semibold cursor-pointer"
+                                    >
+                                        {sendingAction ? (
+                                            <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Dispatching Email & Updating Stage...</>
+                                        ) : (
+                                            <><Send className="w-4 h-4 mr-1.5" /> Confirm & Send to Candidate</>
+                                        )}
+                                    </Button>
+                                </div>
                             </DialogFooter>
                         </form>
+                    )}
+                </DialogContent>
+            </Dialog>
+
+            {/* Branded A4 Company Letterhead Modal for Recruiter Printing / Saving PDF */}
+            <Dialog open={Boolean(letterheadData)} onOpenChange={() => setLetterheadData(null)}>
+                <DialogContent className="sm:max-w-[780px] max-h-[92vh] overflow-y-auto rounded-3xl p-0">
+                    {letterheadData && (
+                        <div className="p-8 sm:p-10 bg-white space-y-6">
+                            {/* Official Letterhead Header */}
+                            <div className="flex items-start justify-between border-b-2 border-[#6A38C2] pb-6">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-14 h-14 rounded-2xl bg-purple-50 border border-purple-100 flex items-center justify-center overflow-hidden">
+                                        {letterheadData.companyLogo ? (
+                                            <img src={letterheadData.companyLogo} alt="logo" className="w-full h-full object-cover" />
+                                        ) : (
+                                            <Building2 className="w-7 h-7 text-[#6A38C2]" />
+                                        )}
+                                    </div>
+                                    <div>
+                                        <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight">
+                                            {letterheadData.companyName}
+                                        </h2>
+                                        <p className="text-xs text-gray-500">
+                                            {letterheadData.companyLocation} • Official HR Executive Document
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="text-right text-xs text-gray-500 space-y-1">
+                                    <div className="inline-block px-3 py-1 rounded-full bg-purple-100 text-[#6A38C2] font-bold uppercase tracking-wider text-[10px]">
+                                        {letterheadData.type === "joining" ? "Official Appointment & Joining Letter" : "Official Employment Offer Letter"}
+                                    </div>
+                                    <p>Ref ID: JP-{String(letterheadData.appId).slice(-6).toUpperCase()}</p>
+                                    <p>Date: {new Date().toLocaleDateString()}</p>
+                                </div>
+                            </div>
+
+                            {/* Recipient Block */}
+                            <div className="text-xs text-gray-700 space-y-0.5">
+                                <p className="font-bold text-gray-900 text-sm">To: {letterheadData.candidateName}</p>
+                                <p>Email: {letterheadData.candidateEmail}</p>
+                                {letterheadData.candidatePhone && <p>Phone: {letterheadData.candidatePhone}</p>}
+                                <p>Position: <strong>{letterheadData.jobTitle}</strong></p>
+                            </div>
+
+                            {/* Body Text */}
+                            <div className="text-sm text-gray-800 whitespace-pre-line leading-relaxed py-2">
+                                {letterheadData.type === "joining"
+                                    ? letterheadData.joiningDetails?.letterContent
+                                    : letterheadData.offerDetails?.letterContent}
+                            </div>
+
+                            {/* Structured Terms Table */}
+                            {letterheadData.type === "joining" ? (
+                                <div className="border border-gray-200 rounded-2xl overflow-hidden text-xs">
+                                    <div className="bg-gray-50 px-4 py-2.5 font-bold text-gray-900 uppercase tracking-wider border-b border-gray-200">
+                                        Onboarding & Joining Schedule
+                                    </div>
+                                    <div className="grid grid-cols-2 divide-x divide-y divide-gray-100">
+                                        <div className="p-3"><span className="text-gray-500">Joining Date:</span> <strong className="text-gray-900 ml-1">{letterheadData.joiningDetails?.joiningDate}</strong></div>
+                                        <div className="p-3"><span className="text-gray-500">Reporting Time:</span> <strong className="text-gray-900 ml-1">{letterheadData.joiningDetails?.reportingTime}</strong></div>
+                                        <div className="p-3"><span className="text-gray-500">Reporting Manager:</span> <strong className="text-gray-900 ml-1">{letterheadData.joiningDetails?.reportingManager}</strong></div>
+                                        <div className="p-3"><span className="text-gray-500">Work Mode:</span> <strong className="text-gray-900 ml-1">{letterheadData.joiningDetails?.workMode}</strong></div>
+                                        <div className="p-3 col-span-2"><span className="text-gray-500">Mandatory Documents:</span> <strong className="text-gray-900 ml-1">{letterheadData.joiningDetails?.documentsRequired}</strong></div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="border border-gray-200 rounded-2xl overflow-hidden text-xs">
+                                    <div className="bg-gray-50 px-4 py-2.5 font-bold text-gray-900 uppercase tracking-wider border-b border-gray-200">
+                                        Compensation & Employment Terms
+                                    </div>
+                                    <div className="grid grid-cols-2 divide-x divide-y divide-gray-100">
+                                        <div className="p-3"><span className="text-gray-500">Annual Compensation (CTC):</span> <strong className="text-gray-900 ml-1">{letterheadData.offerDetails?.ctc}</strong></div>
+                                        <div className="p-3"><span className="text-gray-500">Proposed Start Date:</span> <strong className="text-gray-900 ml-1">{letterheadData.offerDetails?.joiningDate}</strong></div>
+                                        <div className="p-3"><span className="text-gray-500">Work Location:</span> <strong className="text-gray-900 ml-1">{letterheadData.offerDetails?.location}</strong></div>
+                                        <div className="p-3"><span className="text-gray-500">Probation Period:</span> <strong className="text-gray-900 ml-1">{letterheadData.offerDetails?.probationMonths || 3} Months</strong></div>
+                                        <div className="p-3 col-span-2"><span className="text-gray-500">Benefits & Perks:</span> <strong className="text-gray-900 ml-1">{letterheadData.offerDetails?.benefits}</strong></div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Signatures & Digital Stamp Footer */}
+                            <div className="pt-8 border-t border-gray-200 flex items-end justify-between text-xs">
+                                <div className="space-y-1">
+                                    <div className="inline-flex items-center gap-1.5 text-[#6A38C2] font-bold">
+                                        <ShieldCheck className="w-4 h-4" /> Digitally Verified by {letterheadData.companyName} HR
+                                    </div>
+                                    <p className="text-gray-500">Authorized Signatory • Talent Acquisition</p>
+                                </div>
+                                <div className="text-right space-y-1">
+                                    <p className="font-serif italic text-base text-gray-900">
+                                        {letterheadData.candidateSignature || letterheadData.candidateName}
+                                    </p>
+                                    <p className="text-gray-500 border-t border-gray-300 pt-1">Candidate Digital Signature</p>
+                                </div>
+                            </div>
+
+                            <div className="flex justify-end gap-2 pt-4">
+                                <Button type="button" variant="outline" onClick={() => setLetterheadData(null)} className="rounded-xl text-xs">
+                                    Close Preview
+                                </Button>
+                                <Button
+                                    type="button"
+                                    onClick={() =>
+                                        printA4Letterhead({
+                                            type: letterheadData.type,
+                                            appId: letterheadData.appId,
+                                            candidateName: letterheadData.candidateName,
+                                            candidateEmail: letterheadData.candidateEmail,
+                                            candidatePhone: letterheadData.candidatePhone,
+                                            candidateSignature: letterheadData.candidateSignature,
+                                            jobTitle: letterheadData.jobTitle,
+                                            companyName: letterheadData.companyName,
+                                            companyLogo: letterheadData.companyLogo,
+                                            companyLocation: letterheadData.companyLocation,
+                                            letterBody:
+                                                letterheadData.type === "joining"
+                                                    ? letterheadData.joiningDetails?.letterContent
+                                                    : letterheadData.offerDetails?.letterContent,
+                                            offerDetails: letterheadData.offerDetails,
+                                            joiningDetails: letterheadData.joiningDetails
+                                        })
+                                    }
+                                    className="rounded-xl bg-[#6A38C2] hover:bg-[#5b30a6] text-white text-xs cursor-pointer"
+                                >
+                                    <Printer className="w-4 h-4 mr-1.5" /> Print / Save Clean A4 PDF
+                                </Button>
+                            </div>
+                        </div>
                     )}
                 </DialogContent>
             </Dialog>

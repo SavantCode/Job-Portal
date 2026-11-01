@@ -11,6 +11,28 @@ import { Search, X, Briefcase } from 'lucide-react';
 import { resetJobFilters, setJobFilters } from '@/redux/jobSlice';
 import useGetAllJobs from '@/hooks/useGetAllJobs';
 
+const matchesSalaryFilter = (jobSalaryRaw, filterSalary) => {
+    if (!filterSalary) return true;
+    const jobSalStr = String(jobSalaryRaw || "").trim();
+    if (!jobSalStr) return false;
+    if (jobSalStr.includes(filterSalary)) return true;
+
+    const nums = jobSalStr.match(/\d+(\.\d+)?/g)?.map(Number) || [];
+    if (nums.length === 0) return false;
+    const jobMin = nums[0];
+    const jobMax = nums.length > 1 ? nums[1] : nums[0];
+
+    if (filterSalary === "25+") {
+        return jobMax >= 25;
+    }
+    const filterParts = filterSalary.split("-").map(Number);
+    if (filterParts.length === 2 && !isNaN(filterParts[0]) && !isNaN(filterParts[1])) {
+        const [fMin, fMax] = filterParts;
+        return jobMax >= fMin && jobMin <= fMax;
+    }
+    return false;
+};
+
 const Jobs = () => {
     useGetAllJobs();
     const dispatch = useDispatch();
@@ -63,10 +85,9 @@ const Jobs = () => {
                 if (jobFilters.experience === "5+" && exp < 5) return false;
             }
 
-            // 6. Salary Range match
+            // 6. Salary Range match (supports both range strings like "10-15" and single numbers like "12")
             if (jobFilters.salary) {
-                const jobSal = String(job?.salary || "");
-                if (!jobSal.includes(jobFilters.salary)) return false;
+                if (!matchesSalaryFilter(job?.salary, jobFilters.salary)) return false;
             }
 
             return true;
