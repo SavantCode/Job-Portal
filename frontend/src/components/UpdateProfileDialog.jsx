@@ -10,9 +10,18 @@ import { USER_API_END_POINT } from '@/utils/constant'
 import { setUser } from '@/redux/authSlice'
 import { toast } from 'sonner'
 
+/**
+ * UpdateProfileDialog Component
+ * Supports both Candidate and Recruiter profile updates:
+ * - Full Name, Email, Phone Number
+ * - Bio / Recruiter Headline
+ * - Skills / Hiring Focus Areas
+ * - Direct Avatar Image URL or File Upload (Photo for Recruiter, Resume PDF / Photo for Student)
+ */
 const UpdateProfileDialog = ({ open, setOpen }) => {
     const [loading, setLoading] = useState(false);
     const { user } = useSelector(store => store.auth);
+    const isRecruiter = user?.role === 'recruiter';
 
     const [input, setInput] = useState({
         fullname: user?.fullname || "",
@@ -20,10 +29,10 @@ const UpdateProfileDialog = ({ open, setOpen }) => {
         phoneNumber: user?.phoneNumber || "",
         bio: user?.profile?.bio || "",
         skills: user?.profile?.skills?.join(", ") || "",
+        profilePhotoUrl: user?.profile?.profilePhoto || "",
         file: null
     });
 
-    // Sync form values whenever user profile data changes or dialog opens
     useEffect(() => {
         if (user) {
             setInput({
@@ -32,6 +41,7 @@ const UpdateProfileDialog = ({ open, setOpen }) => {
                 phoneNumber: user.phoneNumber || "",
                 bio: user?.profile?.bio || "",
                 skills: user?.profile?.skills?.join(", ") || "",
+                profilePhotoUrl: user?.profile?.profilePhoto || "",
                 file: null
             });
         }
@@ -56,8 +66,10 @@ const UpdateProfileDialog = ({ open, setOpen }) => {
         formData.append("phoneNumber", input.phoneNumber);
         formData.append("bio", input.bio);
         formData.append("skills", input.skills);
-        
-        // Append file only if a new resume has been selected
+        if (input.profilePhotoUrl) {
+            formData.append("profilePhotoUrl", input.profilePhotoUrl);
+        }
+
         if (input.file) {
             formData.append("file", input.file);
         }
@@ -73,7 +85,7 @@ const UpdateProfileDialog = ({ open, setOpen }) => {
             if (res.data.success) {
                 dispatch(setUser(res.data.user));
                 toast.success(res.data.message);
-                setOpen(false); // Close modal only on success
+                setOpen(false);
             }
         } catch (error) {
             console.log(error);
@@ -85,15 +97,15 @@ const UpdateProfileDialog = ({ open, setOpen }) => {
 
     return (
         <div>
-            <Dialog open={open}>
-                <DialogContent className="sm:max-w-[425px]" onInteractOutside={() => setOpen(false)}>
+            <Dialog open={open} onOpenChange={setOpen}>
+                <DialogContent className="sm:max-w-[460px] rounded-2xl" onInteractOutside={() => setOpen(false)}>
                     <DialogHeader>
-                        <DialogTitle>Update Profile</DialogTitle>
+                        <DialogTitle>Update {isRecruiter ? "Recruiter" : "Candidate"} Profile</DialogTitle>
                     </DialogHeader>
                     <form onSubmit={submitHandler}>
                         <div className='grid gap-4 py-4'>
                             <div className='grid grid-cols-4 items-center gap-4'>
-                                <Label htmlFor="fullname" className="text-right">Name</Label>
+                                <Label htmlFor="fullname" className="text-right text-xs font-semibold">Full Name</Label>
                                 <Input
                                     id="fullname"
                                     name="fullname"
@@ -104,7 +116,7 @@ const UpdateProfileDialog = ({ open, setOpen }) => {
                                 />
                             </div>
                             <div className='grid grid-cols-4 items-center gap-4'>
-                                <Label htmlFor="email" className="text-right">Email</Label>
+                                <Label htmlFor="email" className="text-right text-xs font-semibold">Email</Label>
                                 <Input
                                     id="email"
                                     name="email"
@@ -115,7 +127,7 @@ const UpdateProfileDialog = ({ open, setOpen }) => {
                                 />
                             </div>
                             <div className='grid grid-cols-4 items-center gap-4'>
-                                <Label htmlFor="phoneNumber" className="text-right">Number</Label>
+                                <Label htmlFor="phoneNumber" className="text-right text-xs font-semibold">Phone</Label>
                                 <Input
                                     id="phoneNumber"
                                     name="phoneNumber"
@@ -126,49 +138,68 @@ const UpdateProfileDialog = ({ open, setOpen }) => {
                                 />
                             </div>
                             <div className='grid grid-cols-4 items-center gap-4'>
-                                <Label htmlFor="bio" className="text-right">Bio</Label>
+                                <Label htmlFor="bio" className="text-right text-xs font-semibold">
+                                    {isRecruiter ? "Headline / Bio" : "Bio"}
+                                </Label>
                                 <Input
                                     id="bio"
                                     name="bio"
                                     type="text"
+                                    placeholder={isRecruiter ? "e.g. Lead Technical Recruiter at TechFlow" : "Brief summary about yourself"}
                                     value={input.bio}
                                     onChange={changeEventHandler}
                                     className="col-span-3"
                                 />
                             </div>
                             <div className='grid grid-cols-4 items-center gap-4'>
-                                <Label htmlFor="skills" className="text-right">Skills</Label>
+                                <Label htmlFor="skills" className="text-right text-xs font-semibold">
+                                    {isRecruiter ? "Hiring Focus" : "Skills"}
+                                </Label>
                                 <Input
                                     id="skills"
                                     name="skills"
                                     type="text"
-                                    placeholder="Comma separated (e.g. React, Node, MongoDB)"
+                                    placeholder={isRecruiter ? "e.g. Engineering, AI/ML, Product, Cloud" : "e.g. React, Node.js, MongoDB"}
                                     value={input.skills}
                                     onChange={changeEventHandler}
                                     className="col-span-3"
                                 />
                             </div>
                             <div className='grid grid-cols-4 items-center gap-4'>
-                                <Label htmlFor="file" className="text-right">Resume</Label>
+                                <Label htmlFor="profilePhotoUrl" className="text-right text-xs font-semibold">Avatar URL</Label>
+                                <Input
+                                    id="profilePhotoUrl"
+                                    name="profilePhotoUrl"
+                                    type="text"
+                                    placeholder="Paste image URL or upload file below"
+                                    value={input.profilePhotoUrl}
+                                    onChange={changeEventHandler}
+                                    className="col-span-3 text-xs"
+                                />
+                            </div>
+                            <div className='grid grid-cols-4 items-center gap-4'>
+                                <Label htmlFor="file" className="text-right text-xs font-semibold">
+                                    {isRecruiter ? "Upload Photo" : "Resume / Photo"}
+                                </Label>
                                 <Input
                                     id="file"
                                     name="file"
                                     type="file"
-                                    accept="application/pdf"
+                                    accept={isRecruiter ? "image/*" : "application/pdf,image/*"}
                                     onChange={fileChangeHandler}
-                                    className="col-span-3 cursor-pointer"
+                                    className="col-span-3 cursor-pointer text-xs"
                                 />
                             </div>
                         </div>
                         <DialogFooter>
                             {
                                 loading ? (
-                                    <Button disabled className="w-full my-4"> 
-                                        <Loader2 className='mr-2 h-4 w-4 animate-spin' /> Please wait 
+                                    <Button disabled className="w-full my-2">
+                                        <Loader2 className='mr-2 h-4 w-4 animate-spin' /> Saving Changes...
                                     </Button>
                                 ) : (
-                                    <Button type="submit" className="w-full my-4 bg-[#6A38C2] hover:bg-[#5b30a6]">
-                                        Update
+                                    <Button type="submit" className="w-full my-2 bg-[#6A38C2] hover:bg-[#5b30a6] cursor-pointer">
+                                        Save Profile Changes
                                     </Button>
                                 )
                             }

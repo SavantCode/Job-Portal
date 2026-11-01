@@ -8,6 +8,10 @@ import {
     sendEnterpriseEmail
 } from "../utils/mailer.js";
 
+/**
+ * Candidate applies for a job
+ * Creates the application record AND dispatches notifications to both Candidate and Recruiter
+ */
 export const applyJob = async (req, res) => {
     try {
         const userId = req.id;
@@ -37,6 +41,8 @@ export const applyJob = async (req, res) => {
             });
         }
 
+        const applicantUser = await User.findById(userId);
+
         const newApplication = await Application.create({
             job: jobId,
             applicant: userId,
@@ -48,7 +54,7 @@ export const applyJob = async (req, res) => {
         job.applications.push(newApplication._id);
         await job.save();
 
-        // Create initial confirmation notification for the candidate
+        // 1. Confirmation notification for the Candidate
         await Notification.create({
             recipient: userId,
             application: newApplication._id,
@@ -57,6 +63,26 @@ export const applyJob = async (req, res) => {
             title: `Application Submitted: ${job.title}`,
             message: `Your application for ${job.title} at ${job.company?.name || "the company"} has been received and is pending review.`
         });
+
+        // 2. Real-time notification for the Recruiter who posted the job
+        if (job.created_by) {
+            await Notification.create({
+                recipient: job.created_by,
+                sender: userId,
+                application: newApplication._id,
+                job: job._id,
+                type: "new_application",
+                title: `New Applicant for ${job.title}: ${applicantUser?.fullname || "Candidate"}`,
+                message: `${applicantUser?.fullname || "A candidate"} (${(applicantUser?.profile?.skills || []).slice(0, 4).join(", ") || "View profile"}) just applied for ${job.title} at ${job.company?.name || "your company"}.`,
+                metadata: {
+                    jobId: job._id,
+                    jobTitle: job.title,
+                    companyName: job.company?.name || "",
+                    candidateName: applicantUser?.fullname || "",
+                    candidateEmail: applicantUser?.email || ""
+                }
+            });
+        }
 
         return res.status(201).json({
             message: "Job applied successfully.",
@@ -72,6 +98,9 @@ export const applyJob = async (req, res) => {
     }
 };
 
+/**
+ * Candidate withdraws a pending application
+ */
 export const withdrawApplication = async (req, res) => {
     try {
         const userId = req.id;
@@ -117,6 +146,9 @@ export const withdrawApplication = async (req, res) => {
     }
 };
 
+/**
+ * Fetch all applications submitted by the logged-in candidate
+ */
 export const getAppliedJobs = async (req, res) => {
     try {
         const userId = req.id;
@@ -147,6 +179,9 @@ export const getAppliedJobs = async (req, res) => {
     }
 };
 
+/**
+ * Fetch all applicants for a specific job posting (Recruiter view)
+ */
 export const getApplicants = async (req, res) => {
     try {
         const jobId = req.params.id;
@@ -178,6 +213,9 @@ export const getApplicants = async (req, res) => {
     }
 };
 
+/**
+ * Quick status update (legacy endpoint)
+ */
 export const updateStatus = async (req, res) => {
     try {
         const { status } = req.body;
@@ -241,13 +279,7 @@ export const updateStatus = async (req, res) => {
 /**
  * Full Enterprise Hiring Workflow Action Endpoint
  * Handles sequential stages:
- * 1. shortlist (Accept Application)
- * 2. assignment (Send Technical Assignment)
- * 3. interview (Schedule Round 1, Round 2, HR Round with .ics calendar attachment)
- * 4. interview_passed (Mark Interview Cleared)
- * 5. offer_letter (Send Official Offer Letter)
- * 6. joining_letter (Send Official Joining / Appointment Letter)
- * 7. rejection (Constructive Rejection)
+ * 1. shortlist -> 2. assignment -> 3. interview (.ics) -> 4. interview_passed -> 5. offer_letter -> 6. joining_letter -> 7. rejection
  */
 export const executeHiringStageAction = async (req, res) => {
     try {
@@ -279,7 +311,6 @@ export const executeHiringStageAction = async (req, res) => {
         const job = application.job;
         const companyName = job?.company?.name || "Enterprise Hiring Partner";
 
-        // Enforce logical progression rules
         if (
             ["assignment", "interview", "interview_passed", "offer_letter", "joining_letter"].includes(actionType) &&
             application.status === "rejected"
@@ -349,7 +380,10 @@ export const executeHiringStageAction = async (req, res) => {
                 probationMonths: Number(offerDetails?.probationMonths || 3),
                 benefits: offerDetails?.benefits || "Health Insurance, Flexible Work, Learning Stipend",
                 letterContent: body,
-                issuedAt: new Date()
+                issuedAt: new Date(),
+                responseStatus: "pending",
+                candidateSignature: "",
+                candidateNote: ""
             };
             badgeText = "OFFICIAL OFFER LETTER";
             badgeColor = "#047857";
@@ -460,7 +494,6 @@ export const executeHiringStageAction = async (req, res) => {
 
         await application.save();
 
-        // Create real-time candidate notification
         const notification = await Notification.create({
             recipient: candidate?._id,
             sender: req.id,
@@ -499,7 +532,7 @@ export const executeHiringStageAction = async (req, res) => {
 };
 
 /**
- * Candidate submits assignment link
+ * Candidate submits assignment link + Notifies Recruiter
  */
 export const submitCandidateAssignment = async (req, res) => {
     try {
@@ -510,7 +543,10 @@ export const submitCandidateAssignment = async (req, res) => {
             return res.status(400).json({ message: "Assignment submission link is required.", success: false });
         }
 
-        const application = await Application.findOne({ _id: applicationId, applicant: req.id });
+        const application = await Application.findOne({ _id: applicationId, applicant: req.id })
+            .populate("applicant")
+            .populate({ path: "job", populate: { path: "company" } });
+
         if (!application) {
             return res.status(404).json({ message: "Application not found.", success: false });
         }
@@ -523,13 +559,118 @@ export const submitCandidateAssignment = async (req, res) => {
 
         await application.save();
 
+        // Notify the Recruiter who posted the job
+        if (application.job?.created_by) {
+            await Notification.create({
+                recipient: application.job.created_by,
+                sender: req.id,
+                application: application._id,
+                job: application.job._id,
+                type: "assignment_submitted",
+                title: `📝 Assignment Submitted: ${application.applicant?.fullname} (${application.job?.title})`,
+                message: `${application.applicant?.fullname} submitted their technical assignment ("${application.assignmentDetails.title || "Take-Home Challenge"}"). Submission URL: ${submissionLink.trim()}`,
+                metadata: {
+                    jobId: application.job._id,
+                    jobTitle: application.job.title,
+                    companyName: application.job.company?.name || "",
+                    candidateName: application.applicant?.fullname || "",
+                    submissionLink: submissionLink.trim()
+                }
+            });
+        }
+
         return res.status(200).json({
             success: true,
-            message: "Assignment submitted successfully! The recruiter can now review it.",
+            message: "Assignment submitted successfully! The recruiter has been notified.",
             application
         });
     } catch (error) {
         console.error(error);
         return res.status(500).json({ message: "Failed to submit assignment.", success: false });
+    }
+};
+
+/**
+ * Two-Way Offer Response Endpoint
+ * Candidate digitally signs & Accepts or Declines Official Offer Letter + Notifies Recruiter
+ */
+export const respondToOffer = async (req, res) => {
+    try {
+        const applicationId = req.params.id;
+        const { decision, signature = "", note = "" } = req.body; // decision: "accepted" | "declined"
+
+        if (!["accepted", "declined"].includes(decision)) {
+            return res.status(400).json({
+                success: false,
+                message: "Decision must be 'accepted' or 'declined'."
+            });
+        }
+
+        const application = await Application.findOne({ _id: applicationId, applicant: req.id })
+            .populate("applicant")
+            .populate({ path: "job", populate: { path: "company" } });
+
+        if (!application) {
+            return res.status(404).json({
+                success: false,
+                message: "Application not found."
+            });
+        }
+
+        application.offerDetails = {
+            ...(application.offerDetails || {}),
+            responseStatus: decision,
+            candidateSignature: signature.trim() || application.applicant?.fullname || "Digitally Signed",
+            candidateNote: note.trim(),
+            respondedAt: new Date()
+        };
+
+        if (decision === "accepted") {
+            application.hiringStage = "offer_accepted";
+        } else {
+            application.hiringStage = "offer_declined";
+        }
+
+        await application.save();
+
+        // Notify the Recruiter immediately
+        if (application.job?.created_by) {
+            const isAccepted = decision === "accepted";
+            await Notification.create({
+                recipient: application.job.created_by,
+                sender: req.id,
+                application: application._id,
+                job: application.job._id,
+                type: isAccepted ? "offer_accepted" : "offer_declined",
+                title: isAccepted
+                    ? `🎉 Offer Accepted by ${application.applicant?.fullname} (${application.job?.title})`
+                    : `Offer Declined by ${application.applicant?.fullname} (${application.job?.title})`,
+                message: isAccepted
+                    ? `${application.applicant?.fullname} has digitally signed ("${application.offerDetails.candidateSignature}") and accepted the Offer Letter for ${application.job?.title}! You can now issue their Official Joining Letter.`
+                    : `${application.applicant?.fullname} has declined the employment offer for ${application.job?.title}.${note ? ` Note: "${note}"` : ""}`,
+                metadata: {
+                    jobId: application.job._id,
+                    jobTitle: application.job.title,
+                    companyName: application.job.company?.name || "",
+                    candidateName: application.applicant?.fullname || "",
+                    signature: application.offerDetails.candidateSignature,
+                    decision
+                }
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: decision === "accepted"
+                ? "Congratulations! You have officially accepted the Offer Letter. The recruiter has been notified to issue your Joining Letter."
+                : "You have declined the offer. The recruiter has been notified.",
+            application
+        });
+    } catch (error) {
+        console.error("[Respond To Offer Error]:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Server error while recording offer response."
+        });
     }
 };

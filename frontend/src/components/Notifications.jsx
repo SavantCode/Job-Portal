@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import Navbar from './shared/Navbar';
 import { useDispatch, useSelector } from 'react-redux';
 import axios from 'axios';
-import { NOTIFICATION_API_END_POINT } from '@/utils/constant';
+import { APPLICATION_API_END_POINT, NOTIFICATION_API_END_POINT } from '@/utils/constant';
 import {
     setNotifications,
     markOneReadInStore,
@@ -10,22 +10,29 @@ import {
     removeNotificationFromStore,
     clearNotificationsInStore
 } from '@/redux/notificationSlice';
+import { setAllAppliedJobs } from '@/redux/jobSlice';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from './ui/dialog';
 import { toast } from 'sonner';
 import {
     Bell, Trash2, CheckCheck, Calendar, Award, ClipboardList,
-    Building2, ExternalLink, Video, Download, CheckCircle2, XCircle, Eye
+    Building2, ExternalLink, Video, Download, CheckCircle2, XCircle, Eye, Users, Printer, ShieldCheck, Loader2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { printA4Letterhead } from '@/utils/printDocument';
 
 const TYPE_CONFIG = {
+    new_application: { label: "New Applicant", icon: Users, badgeCls: "bg-purple-100 text-[#6A38C2]" },
     shortlisted: { label: "Shortlisted", icon: CheckCircle2, badgeCls: "bg-blue-100 text-blue-800" },
     assignment: { label: "Assignment", icon: ClipboardList, badgeCls: "bg-indigo-100 text-indigo-800" },
+    assignment_submitted: { label: "Assignment Submitted", icon: ClipboardList, badgeCls: "bg-blue-100 text-blue-800" },
     interview: { label: "Interview Invite", icon: Calendar, badgeCls: "bg-purple-100 text-[#6A38C2]" },
     interview_passed: { label: "Round Cleared", icon: CheckCircle2, badgeCls: "bg-emerald-100 text-emerald-800" },
     offer_letter: { label: "Offer Letter", icon: Award, badgeCls: "bg-teal-100 text-teal-900" },
+    offer_accepted: { label: "Offer Accepted ✍️", icon: CheckCircle2, badgeCls: "bg-emerald-100 text-emerald-900" },
+    offer_declined: { label: "Offer Declined", icon: XCircle, badgeCls: "bg-amber-100 text-amber-900" },
     joining_letter: { label: "Joining Letter", icon: Building2, badgeCls: "bg-green-100 text-green-900" },
     rejected: { label: "Status Update", icon: XCircle, badgeCls: "bg-red-100 text-red-700" },
     status_update: { label: "Application", icon: Bell, badgeCls: "bg-gray-100 text-gray-700" }
@@ -35,9 +42,20 @@ const Notifications = () => {
     const dispatch = useDispatch();
     const navigate = useNavigate();
     const { notifications = [] } = useSelector(store => store.notification);
+    const { allAppliedJobs = [] } = useSelector(store => store.job);
+    const { user } = useSelector(store => store.auth);
+    const isRecruiter = user?.role === 'recruiter';
+
     const [loading, setLoading] = useState(false);
     const [filter, setFilter] = useState("all");
     const [selectedNotif, setSelectedNotif] = useState(null);
+    const [printNotifLetter, setPrintNotifLetter] = useState(null);
+
+    // Direct Offer Accept / Decline & Assignment Submit inside Notification Modal
+    const [signature, setSignature] = useState("");
+    const [respondingOffer, setRespondingOffer] = useState(false);
+    const [submissionLink, setSubmissionLink] = useState("");
+    const [submittingAssignment, setSubmittingAssignment] = useState(false);
 
     const fetchNotifications = async () => {
         try {
@@ -56,6 +74,114 @@ const Notifications = () => {
     useEffect(() => {
         fetchNotifications();
     }, []);
+
+    const getApplicationIdFromNotif = (notif) => {
+        if (!notif) return null;
+        if (typeof notif.application === "object" && notif.application?._id) return notif.application._id;
+        if (typeof notif.application === "string") return notif.application;
+        if (notif.metadata?.applicationId) return notif.metadata.applicationId;
+        const jobId = notif.job?._id || notif.job || notif.metadata?.jobId;
+        if (jobId) {
+            const matchedApp = allAppliedJobs.find(a => (a.job?._id || a.job) === jobId);
+            if (matchedApp) return matchedApp._id;
+        }
+        return null;
+    };
+
+    const getApplicationObjectForNotif = (notif) => {
+        if (!notif) return null;
+        const appId = getApplicationIdFromNotif(notif);
+        const fromStore = allAppliedJobs.find(a => a._id === appId);
+        if (fromStore) return fromStore;
+        if (typeof notif.application === "object" && notif.application) return notif.application;
+        return null;
+    };
+
+    const openInspectModal = (notif) => {
+        setSelectedNotif(notif);
+        const appObj = getApplicationObjectForNotif(notif);
+        setSignature(appObj?.offerDetails?.candidateSignature || user?.fullname || "");
+        setSubmissionLink(appObj?.assignmentDetails?.submissionLink || "");
+        if (!notif.isRead) handleMarkRead(notif._id);
+    };
+
+    const handleDirectOfferResponse = async (decision) => {
+        const appId = getApplicationIdFromNotif(selectedNotif);
+        if (!appId) {
+            toast.error("Could not locate the linked application. Please respond from Applied Jobs in your Profile.");
+            return;
+        }
+        const finalSignature = (signature || user?.fullname || "Candidate").trim();
+        if (decision === "accepted" && !finalSignature) {
+            toast.error("Please enter your full name as your digital signature to accept the offer.");
+            return;
+        }
+        try {
+            setRespondingOffer(true);
+            const res = await axios.post(
+                `${APPLICATION_API_END_POINT}/${appId}/respond-offer`,
+                { decision, signature: finalSignature },
+                { withCredentials: true }
+            );
+            if (res.data.success) {
+                toast.success(res.data.message);
+                const updatedApp = res.data.application;
+                const updatedJobs = allAppliedJobs.map(item =>
+                    item._id === appId
+                        ? {
+                            ...item,
+                            status: updatedApp.status || item.status,
+                            hiringStage: updatedApp.hiringStage,
+                            offerDetails: updatedApp.offerDetails
+                        }
+                        : item
+                );
+                dispatch(setAllAppliedJobs(updatedJobs));
+                // Also update selectedNotif.application in local state
+                setSelectedNotif(prev => prev ? {
+                    ...prev,
+                    application: updatedApp
+                } : null);
+            }
+        } catch (error) {
+            toast.error(error.response?.data?.message || "Failed to submit offer response.");
+        } finally {
+            setRespondingOffer(false);
+        }
+    };
+
+    const handleDirectAssignmentSubmit = async (e) => {
+        e.preventDefault();
+        const appId = getApplicationIdFromNotif(selectedNotif);
+        if (!appId) {
+            toast.error("Could not locate the linked application.");
+            return;
+        }
+        try {
+            setSubmittingAssignment(true);
+            const res = await axios.post(
+                `${APPLICATION_API_END_POINT}/${appId}/submit-assignment`,
+                { submissionLink },
+                { withCredentials: true }
+            );
+            if (res.data.success) {
+                toast.success(res.data.message);
+                const updatedApp = res.data.application;
+                const updatedJobs = allAppliedJobs.map(item =>
+                    item._id === appId ? { ...item, assignmentDetails: updatedApp.assignmentDetails } : item
+                );
+                dispatch(setAllAppliedJobs(updatedJobs));
+                setSelectedNotif(prev => prev ? {
+                    ...prev,
+                    application: updatedApp
+                } : null);
+            }
+        } catch (error) {
+            toast.error(error.response?.data?.message || "Failed to submit assignment.");
+        } finally {
+            setSubmittingAssignment(false);
+        }
+    };
 
     const handleMarkRead = async (id) => {
         try {
@@ -123,13 +249,18 @@ const Notifications = () => {
         return notifications.filter(n => {
             if (filter === "unread") return !n.isRead;
             if (filter === "interviews") return n.type === "interview" || n.type === "interview_passed";
-            if (filter === "assignments") return n.type === "assignment";
-            if (filter === "letters") return n.type === "offer_letter" || n.type === "joining_letter";
+            if (filter === "assignments") return n.type === "assignment" || n.type === "assignment_submitted";
+            if (filter === "letters") return ["offer_letter", "offer_accepted", "offer_declined", "joining_letter"].includes(n.type);
             return true;
         });
     }, [notifications, filter]);
 
     const unreadCount = notifications.filter(n => !n.isRead).length;
+    const linkedApplication = getApplicationObjectForNotif(selectedNotif);
+    const offerResponseStatus = linkedApplication?.offerDetails?.responseStatus || (
+        linkedApplication?.hiringStage === "offer_accepted" ? "accepted" :
+        linkedApplication?.hiringStage === "offer_declined" ? "declined" : "pending"
+    );
 
     return (
         <div className="min-h-screen bg-gray-50/40 pb-20">
@@ -145,7 +276,9 @@ const Notifications = () => {
                             </div>
                             <div>
                                 <div className="flex items-center gap-2">
-                                    <h1 className="text-2xl font-bold text-gray-900">Notifications & Letters Center</h1>
+                                    <h1 className="text-2xl font-bold text-gray-900">
+                                        {isRecruiter ? "Recruiter Activity & Alerts Center" : "Notifications & Letters Center"}
+                                    </h1>
                                     {unreadCount > 0 && (
                                         <Badge className="bg-[#F83002] text-white border-none text-xs">
                                             {unreadCount} Unread
@@ -153,7 +286,9 @@ const Notifications = () => {
                                     )}
                                 </div>
                                 <p className="text-xs text-muted-foreground mt-0.5">
-                                    View all interview invitations, calendar links, assignments, offer letters, and joining letters.
+                                    {isRecruiter
+                                        ? "Track new job applicants, submitted technical assignments, and signed offer acceptances."
+                                        : "View all interview invitations, calendar links, assignments, and accept or decline offer letters."}
                                 </p>
                             </div>
                         </div>
@@ -189,9 +324,9 @@ const Notifications = () => {
                         {[
                             { id: "all", label: `All (${notifications.length})` },
                             { id: "unread", label: `Unread (${unreadCount})` },
-                            { id: "interviews", label: "Interviews & Calendar" },
+                            { id: "interviews", label: "Interviews" },
                             { id: "assignments", label: "Assignments" },
-                            { id: "letters", label: "Offer & Joining Letters" }
+                            { id: "letters", label: "Offers & Letters" }
                         ].map(tab => (
                             <button
                                 key={tab.id}
@@ -215,7 +350,11 @@ const Notifications = () => {
                         <div className="py-16 text-center bg-gray-50/60 rounded-2xl border border-dashed border-gray-200 space-y-2">
                             <Bell className="w-10 h-10 text-gray-300 mx-auto" />
                             <p className="text-sm font-semibold text-gray-700">No notifications in this view</p>
-                            <p className="text-xs text-gray-500">When recruiters shortlist you, schedule interviews, or send offer letters, they will appear here.</p>
+                            <p className="text-xs text-gray-500">
+                                {isRecruiter
+                                    ? "When candidates apply, submit assignments, or accept offers, alerts will appear here."
+                                    : "When recruiters shortlist you, schedule interviews, or send offer letters, they will appear here."}
+                            </p>
                         </div>
                     ) : (
                         <div className="space-y-3">
@@ -227,10 +366,7 @@ const Notifications = () => {
                                 return (
                                     <div
                                         key={notif._id}
-                                        onClick={() => {
-                                            setSelectedNotif(notif);
-                                            if (!notif.isRead) handleMarkRead(notif._id);
-                                        }}
+                                        onClick={() => openInspectModal(notif)}
                                         className={`p-5 rounded-2xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
                                             notif.isRead
                                                 ? "bg-white border-gray-100 hover:border-gray-200"
@@ -277,12 +413,12 @@ const Notifications = () => {
                                                 variant="outline"
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    setSelectedNotif(notif);
-                                                    if (!notif.isRead) handleMarkRead(notif._id);
+                                                    openInspectModal(notif);
                                                 }}
                                                 className="h-8 text-xs rounded-xl border-purple-200 text-[#6A38C2] hover:bg-purple-50 cursor-pointer"
                                             >
-                                                <Eye className="w-3.5 h-3.5 mr-1" /> Open Letter / Details
+                                                <Eye className="w-3.5 h-3.5 mr-1" />
+                                                {notif.type === "offer_letter" && !isRecruiter ? "Review & Respond" : "Inspect Details"}
                                             </Button>
 
                                             <Button
@@ -315,6 +451,48 @@ const Notifications = () => {
 
                     {selectedNotif && (
                         <div className="space-y-4 text-sm">
+                            {selectedNotif.metadata?.submissionLink && (
+                                <div className="p-4 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-between">
+                                    <span className="text-xs font-bold text-blue-900">
+                                        📝 Candidate Assignment Submission Link
+                                    </span>
+                                    <a
+                                        href={selectedNotif.metadata.submissionLink}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-xs font-bold text-blue-700 hover:underline flex items-center gap-1"
+                                    >
+                                        Open Submitted Work <ExternalLink className="w-3.5 h-3.5" />
+                                    </a>
+                                </div>
+                            )}
+
+                            {/* Direct Candidate Assignment Submission inside Notification Modal */}
+                            {!isRecruiter && selectedNotif.type === "assignment" && getApplicationIdFromNotif(selectedNotif) && (
+                                <form onSubmit={handleDirectAssignmentSubmit} className="p-4 rounded-2xl bg-blue-50/80 border border-blue-200 space-y-2.5">
+                                    <p className="text-xs font-bold text-blue-900 uppercase">
+                                        📝 Submit Your Technical Assignment Directly
+                                    </p>
+                                    <div className="flex items-center gap-2">
+                                        <Input
+                                            value={submissionLink}
+                                            onChange={(e) => setSubmissionLink(e.target.value)}
+                                            placeholder="Paste your GitHub repository or live deployment URL..."
+                                            className="h-9 text-xs bg-white"
+                                            required
+                                        />
+                                        <Button
+                                            type="submit"
+                                            size="sm"
+                                            disabled={submittingAssignment}
+                                            className="h-9 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs shrink-0 cursor-pointer"
+                                        >
+                                            {submittingAssignment ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Submit Work"}
+                                        </Button>
+                                    </div>
+                                </form>
+                            )}
+
                             {/* Interview Details Box */}
                             {selectedNotif.metadata?.interviewDetails?.date && (
                                 <div className="p-4 rounded-2xl bg-purple-50 border border-purple-200 space-y-2.5">
@@ -352,21 +530,107 @@ const Notifications = () => {
                                 </div>
                             )}
 
-                            {/* Offer Summary Box */}
-                            {selectedNotif.metadata?.offerDetails?.ctc && (
-                                <div className="p-4 rounded-2xl bg-teal-50 border border-teal-200 space-y-1.5 text-xs">
-                                    <p className="font-bold text-teal-900 uppercase">🎉 Official Offer Package Summary</p>
-                                    <p><strong>Compensation (CTC):</strong> {selectedNotif.metadata.offerDetails.ctc}</p>
-                                    <p><strong>Joining Date:</strong> {selectedNotif.metadata.offerDetails.joiningDate}</p>
-                                    <p><strong>Location:</strong> {selectedNotif.metadata.offerDetails.location}</p>
-                                    <p><strong>Benefits:</strong> {selectedNotif.metadata.offerDetails.benefits}</p>
+                            {/* Offer Summary Box + Direct Accept / Decline Offer Controls for Candidate */}
+                            {(selectedNotif.type === "offer_letter" || selectedNotif.metadata?.offerDetails?.ctc) && (
+                                <div className="p-4 rounded-2xl bg-teal-50 border border-teal-200 space-y-3 text-xs">
+                                    <div className="flex items-center justify-between">
+                                        <p className="font-bold text-teal-900 uppercase">🎉 Official Offer Package Summary</p>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => setPrintNotifLetter({ notif: selectedNotif, type: "offer" })}
+                                            className="h-7 text-xs rounded-xl bg-white border-teal-300 text-teal-900 cursor-pointer"
+                                        >
+                                            <Printer className="w-3.5 h-3.5 mr-1" /> Open A4 Letterhead / PDF
+                                        </Button>
+                                    </div>
+                                    {selectedNotif.metadata?.offerDetails && (
+                                        <div className="space-y-1">
+                                            <p><strong>Compensation (CTC):</strong> {selectedNotif.metadata.offerDetails.ctc}</p>
+                                            <p><strong>Joining Date:</strong> {selectedNotif.metadata.offerDetails.joiningDate}</p>
+                                            <p><strong>Location:</strong> {selectedNotif.metadata.offerDetails.location}</p>
+                                            <p><strong>Benefits:</strong> {selectedNotif.metadata.offerDetails.benefits}</p>
+                                        </div>
+                                    )}
+
+                                    {/* Direct Candidate Offer Accept / Decline Action Bar */}
+                                    {!isRecruiter && getApplicationIdFromNotif(selectedNotif) && (
+                                        <div className="pt-2 border-t border-teal-200/80">
+                                            {offerResponseStatus === "accepted" ? (
+                                                <div className="p-3 rounded-xl bg-emerald-100/90 border border-emerald-300 flex items-center justify-between text-emerald-950 font-semibold">
+                                                    <span className="flex items-center gap-1.5">
+                                                        <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                                                        Offer Accepted & Digitally Signed ({linkedApplication?.offerDetails?.candidateSignature || user?.fullname})
+                                                    </span>
+                                                    <span>Recruiter Notified ✓</span>
+                                                </div>
+                                            ) : offerResponseStatus === "declined" ? (
+                                                <div className="p-3 rounded-xl bg-amber-100/90 border border-amber-300 flex items-center justify-between text-amber-950 font-semibold">
+                                                    <span className="flex items-center gap-1.5">
+                                                        <XCircle className="w-4 h-4 text-amber-700" />
+                                                        You declined this offer letter.
+                                                    </span>
+                                                    <span>Recruiter Notified ✓</span>
+                                                </div>
+                                            ) : (
+                                                <div className="p-3.5 rounded-xl bg-white border border-teal-200 space-y-2.5">
+                                                    <p className="font-bold text-gray-900">
+                                                        ✍️ Respond to Employment Offer (Accept or Decline)
+                                                    </p>
+                                                    <div className="flex flex-col sm:flex-row items-center gap-2">
+                                                        <Input
+                                                            value={signature}
+                                                            onChange={(e) => setSignature(e.target.value)}
+                                                            placeholder="Type your full legal name as digital signature..."
+                                                            className="h-9 text-xs"
+                                                        />
+                                                        <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                                                            <Button
+                                                                type="button"
+                                                                size="sm"
+                                                                disabled={respondingOffer}
+                                                                onClick={() => handleDirectOfferResponse("accepted")}
+                                                                className="h-9 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer"
+                                                            >
+                                                                {respondingOffer ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1" />}
+                                                                Accept Offer
+                                                            </Button>
+                                                            <Button
+                                                                type="button"
+                                                                size="sm"
+                                                                variant="outline"
+                                                                disabled={respondingOffer}
+                                                                onClick={() => handleDirectOfferResponse("declined")}
+                                                                className="h-9 rounded-xl border-red-200 text-red-600 hover:bg-red-50 text-xs font-semibold cursor-pointer"
+                                                            >
+                                                                {respondingOffer ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <XCircle className="w-3.5 h-3.5 mr-1" />}
+                                                                Decline Offer
+                                                            </Button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
                             {/* Joining Letter Box */}
                             {selectedNotif.metadata?.joiningDetails?.joiningDate && (
                                 <div className="p-4 rounded-2xl bg-green-50 border border-green-200 space-y-1.5 text-xs">
-                                    <p className="font-bold text-green-900 uppercase">🏛️ Official Joining Instructions</p>
+                                    <div className="flex items-center justify-between">
+                                        <p className="font-bold text-green-900 uppercase">🏛️ Official Joining Instructions</p>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => setPrintNotifLetter({ notif: selectedNotif, type: "joining" })}
+                                            className="h-7 text-xs rounded-xl bg-white border-green-300 text-green-900 cursor-pointer"
+                                        >
+                                            <Printer className="w-3.5 h-3.5 mr-1" /> Open A4 Letterhead / PDF
+                                        </Button>
+                                    </div>
                                     <p><strong>Official Joining Date:</strong> {selectedNotif.metadata.joiningDetails.joiningDate} at {selectedNotif.metadata.joiningDetails.reportingTime}</p>
                                     <p><strong>Reporting Manager:</strong> {selectedNotif.metadata.joiningDetails.reportingManager}</p>
                                     <p><strong>Work Mode:</strong> {selectedNotif.metadata.joiningDetails.workMode}</p>
@@ -408,22 +672,123 @@ const Notifications = () => {
                             <Trash2 className="w-4 h-4 mr-1" /> Delete Notification
                         </Button>
                         <div className="flex items-center gap-2">
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => {
-                                    setSelectedNotif(null);
-                                    navigate("/profile");
-                                }}
-                                className="rounded-xl text-xs"
-                            >
-                                Go to Applied Jobs
-                            </Button>
+                            {isRecruiter && (selectedNotif?.job || selectedNotif?.metadata?.jobId) ? (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() => {
+                                        const jId = selectedNotif?.job?._id || selectedNotif?.job || selectedNotif?.metadata?.jobId;
+                                        setSelectedNotif(null);
+                                        navigate(`/admin/jobs/${jId}/applicants`);
+                                    }}
+                                    className="rounded-xl text-xs border-purple-200 text-[#6A38C2]"
+                                >
+                                    Open Candidate Pipeline →
+                                </Button>
+                            ) : (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() => {
+                                        setSelectedNotif(null);
+                                        navigate("/profile");
+                                    }}
+                                    className="rounded-xl text-xs"
+                                >
+                                    Go to Applied Jobs
+                                </Button>
+                            )}
                             <Button type="button" onClick={() => setSelectedNotif(null)} className="rounded-xl bg-[#6A38C2] text-white text-xs">
                                 Done
                             </Button>
                         </div>
                     </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Branded A4 Letterhead Print Modal inside Notifications */}
+            <Dialog open={Boolean(printNotifLetter)} onOpenChange={() => setPrintNotifLetter(null)}>
+                <DialogContent className="sm:max-w-[780px] max-h-[92vh] overflow-y-auto rounded-3xl p-0">
+                    {printNotifLetter && (
+                        <div className="p-8 sm:p-10 bg-white space-y-6">
+                            <div className="flex items-start justify-between border-b-2 border-[#6A38C2] pb-6">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-14 h-14 rounded-2xl bg-purple-50 border border-purple-100 flex items-center justify-center overflow-hidden">
+                                        {printNotifLetter.notif.metadata?.companyLogo ? (
+                                            <img src={printNotifLetter.notif.metadata.companyLogo} alt="logo" className="w-full h-full object-cover" />
+                                        ) : (
+                                            <Building2 className="w-7 h-7 text-[#6A38C2]" />
+                                        )}
+                                    </div>
+                                    <div>
+                                        <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight">
+                                            {printNotifLetter.notif.metadata?.companyName || "Enterprise Corporation"}
+                                        </h2>
+                                        <p className="text-xs text-gray-500">Official HR Executive Document</p>
+                                    </div>
+                                </div>
+                                <div className="text-right text-xs text-gray-500 space-y-1">
+                                    <div className="inline-block px-3 py-1 rounded-full bg-purple-100 text-[#6A38C2] font-bold uppercase tracking-wider text-[10px]">
+                                        {printNotifLetter.type === "joining" ? "Official Appointment & Joining Letter" : "Official Employment Offer Letter"}
+                                    </div>
+                                    <p>Ref ID: JP-{printNotifLetter.notif._id?.slice(-6).toUpperCase()}</p>
+                                    <p>Date: {new Date(printNotifLetter.notif.createdAt || Date.now()).toLocaleDateString()}</p>
+                                </div>
+                            </div>
+
+                            <div className="text-xs text-gray-700 space-y-0.5">
+                                <p className="font-bold text-gray-900 text-sm">To: {user?.fullname || "Candidate"}</p>
+                                <p>Email: {user?.email}</p>
+                                <p>Position: <strong>{printNotifLetter.notif.metadata?.jobTitle || "Software Engineer"}</strong></p>
+                            </div>
+
+                            <div className="text-sm text-gray-800 whitespace-pre-line leading-relaxed py-2">
+                                {printNotifLetter.notif.emailBody || printNotifLetter.notif.message}
+                            </div>
+
+                            <div className="pt-8 border-t border-gray-200 flex items-end justify-between text-xs">
+                                <div className="space-y-1">
+                                    <div className="inline-flex items-center gap-1.5 text-[#6A38C2] font-bold">
+                                        <ShieldCheck className="w-4 h-4" /> Digitally Verified by {printNotifLetter.notif.metadata?.companyName || "Company"} HR
+                                    </div>
+                                    <p className="text-gray-500">Authorized Signatory • Talent Acquisition</p>
+                                </div>
+                                <div className="text-right space-y-1">
+                                    <p className="font-serif italic text-base text-gray-900">{user?.fullname}</p>
+                                    <p className="text-gray-500 border-t border-gray-300 pt-1">Candidate Digital Signature</p>
+                                </div>
+                            </div>
+
+                            <div className="flex justify-end gap-2 pt-4">
+                                <Button type="button" variant="outline" onClick={() => setPrintNotifLetter(null)} className="rounded-xl text-xs">
+                                    Close Preview
+                                </Button>
+                                <Button
+                                    type="button"
+                                    onClick={() =>
+                                        printA4Letterhead({
+                                            type: printNotifLetter.type,
+                                            appId: printNotifLetter.notif._id,
+                                            candidateName: user?.fullname || "Candidate",
+                                            candidateEmail: user?.email || "",
+                                            candidatePhone: user?.phoneNumber || "",
+                                            candidateSignature: user?.fullname || "",
+                                            jobTitle: printNotifLetter.notif.metadata?.jobTitle || "Software Engineer",
+                                            companyName: printNotifLetter.notif.metadata?.companyName || "Enterprise Corporation",
+                                            companyLogo: printNotifLetter.notif.metadata?.companyLogo || "",
+                                            companyLocation: "Corporate Headquarters",
+                                            letterBody: printNotifLetter.notif.emailBody || printNotifLetter.notif.message,
+                                            offerDetails: printNotifLetter.notif.metadata?.offerDetails || {},
+                                            joiningDetails: printNotifLetter.notif.metadata?.joiningDetails || {}
+                                        })
+                                    }
+                                    className="rounded-xl bg-[#6A38C2] hover:bg-[#5b30a6] text-white text-xs cursor-pointer"
+                                >
+                                    <Printer className="w-4 h-4 mr-1.5" /> Print / Save Clean A4 PDF
+                                </Button>
+                            </div>
+                        </div>
+                    )}
                 </DialogContent>
             </Dialog>
         </div>

@@ -4,6 +4,10 @@ import jwt from "jsonwebtoken";
 import getDataUri from "../utils/datauri.js";
 import cloudinary from "../utils/cloudinary.js";
 
+/**
+ * Register a new User (Student or Recruiter)
+ * Supports optional profile photo upload via Cloudinary
+ */
 export const register = async (req, res) => {
     try {
         const { fullname, email, phoneNumber, password, role } = req.body;
@@ -27,9 +31,20 @@ export const register = async (req, res) => {
 
         let profilePhotoUrl = "";
         if (req.file) {
-            const fileUri = getDataUri(req.file);
-            const cloudResponse = await cloudinary.uploader.upload(fileUri.content);
-            profilePhotoUrl = cloudResponse.secure_url;
+            try {
+                const fileUri = getDataUri(req.file);
+                const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
+                    resource_type: "auto"
+                });
+                profilePhotoUrl = cloudResponse.secure_url;
+            } catch (uploadErr) {
+                console.warn("[Register Photo Upload Warning]:", uploadErr.message);
+                // Fallback to inline data URI for small images
+                if (req.file.size <= 2 * 1024 * 1024) {
+                    const fileUri = getDataUri(req.file);
+                    profilePhotoUrl = fileUri.content;
+                }
+            }
         }
 
         await User.create({
@@ -57,6 +72,9 @@ export const register = async (req, res) => {
     }
 };
 
+/**
+ * Authenticate User & issue HTTP-only JWT cookie
+ */
 export const login = async (req, res) => {
     try {
         const { email, password, role } = req.body;
@@ -121,6 +139,9 @@ export const login = async (req, res) => {
     }
 };
 
+/**
+ * Clear authentication cookie on logout
+ */
 export const logout = async (req, res) => {
     try {
         return res.status(200).cookie("token", "", { maxAge: 0 }).json({
@@ -136,15 +157,14 @@ export const logout = async (req, res) => {
     }
 };
 
+/**
+ * Update User Profile (Works for both Students and Recruiters)
+ * - Uses DataURI for PDF resumes (<= 4MB) so Chrome's PDF viewer NEVER fails with Cloudinary 401/404 PDF restrictions
+ * - Uses Cloudinary (with DataURI fallback) for profile photos
+ */
 export const updateProfile = async (req, res) => {
     try {
-        const { fullname, email, phoneNumber, bio, skills } = req.body;
-
-        let cloudResponse = null;
-        if (req.file) {
-            const fileUri = getDataUri(req.file);
-            cloudResponse = await cloudinary.uploader.upload(fileUri.content);
-        }
+        const { fullname, email, phoneNumber, bio, skills, profilePhotoUrl } = req.body;
 
         const userId = req.id;
         let user = await User.findById(userId);
@@ -166,9 +186,44 @@ export const updateProfile = async (req, res) => {
             user.profile.skills = skillsArray;
         }
 
-        if (req.file && cloudResponse) {
-            user.profile.resume = cloudResponse.secure_url;
-            user.profile.resumeOriginalName = req.file.originalname;
+        // Allow setting profile photo via direct URL if provided
+        if (profilePhotoUrl && profilePhotoUrl.trim()) {
+            user.profile.profilePhoto = profilePhotoUrl.trim();
+        }
+
+        // Handle file upload (Image -> profilePhoto, PDF -> resume)
+        if (req.file) {
+            const fileUri = getDataUri(req.file);
+            const isImage = req.file.mimetype && req.file.mimetype.startsWith("image/");
+
+            if (isImage) {
+                try {
+                    const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
+                        resource_type: "image"
+                    });
+                    user.profile.profilePhoto = cloudResponse.secure_url;
+                } catch (cloudErr) {
+                    console.warn("[Cloudinary Image Upload Fallback]:", cloudErr.message);
+                    user.profile.profilePhoto = fileUri.content;
+                }
+            } else {
+                // For PDF resumes: store inline base64 DataURI if under 4.5MB so Chrome PDF viewer
+                // renders it reliably without Cloudinary free-tier PDF delivery restrictions!
+                if (req.file.size <= 4.5 * 1024 * 1024) {
+                    user.profile.resume = fileUri.content;
+                    user.profile.resumeOriginalName = req.file.originalname;
+                } else {
+                    try {
+                        const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
+                            resource_type: "raw"
+                        });
+                        user.profile.resume = cloudResponse.secure_url;
+                        user.profile.resumeOriginalName = req.file.originalname;
+                    } catch (cloudErr) {
+                        console.warn("[Cloudinary PDF Upload Error]:", cloudErr.message);
+                    }
+                }
+            }
         }
 
         await user.save();
@@ -198,6 +253,9 @@ export const updateProfile = async (req, res) => {
     }
 };
 
+/**
+ * Bookmark or unbookmark a job for later viewing
+ */
 export const toggleSaveJob = async (req, res) => {
     try {
         const userId = req.id;
@@ -239,6 +297,9 @@ export const toggleSaveJob = async (req, res) => {
     }
 };
 
+/**
+ * Fetch all bookmarked jobs populated with company details
+ */
 export const getSavedJobs = async (req, res) => {
     try {
         const userId = req.id;

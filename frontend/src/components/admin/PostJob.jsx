@@ -6,15 +6,19 @@ import { Button } from '../ui/button'
 import { useSelector } from 'react-redux'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import axios from 'axios'
-import { JOB_API_END_POINT } from '@/utils/constant'
+import { AI_API_END_POINT, JOB_API_END_POINT } from '@/utils/constant'
 import { toast } from 'sonner'
 import { useNavigate } from 'react-router-dom'
-import { Loader2, Briefcase, MapPin, IndianRupee, Clock, Users, Building, FileText, CheckCircle2 } from 'lucide-react'
+import { Loader2, Briefcase, MapPin, IndianRupee, Clock, Users, Building, FileText, CheckCircle2, Sparkles } from 'lucide-react'
 
 const LOCAL_STORAGE_KEY = "postJobFormState";
 
+/**
+ * PostJob Component (Recruiter)
+ * - Includes 1-click "✨ Auto-Write Job with AI" button that generates Description, Tech Stack Requirements, and suggested Salary/Experience from the Job Title
+ * - Automatically persists draft state in localStorage
+ */
 const PostJob = () => {
-    // Initialize state from localStorage if available to persist data on refresh
     const [input, setInput] = useState(() => {
         const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (savedData) {
@@ -31,18 +35,18 @@ const PostJob = () => {
             salary: "",
             location: "",
             jobType: "Full-Time",
-            experience: "", 
+            experience: "",
             position: 1,
             companyId: ""
         };
     });
 
     const [loading, setLoading] = useState(false);
+    const [generatingAI, setGeneratingAI] = useState(false);
     const navigate = useNavigate();
 
     const { companies } = useSelector(store => store.company);
 
-    // Save input changes to localStorage automatically so refresh won't wipe data
     useEffect(() => {
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(input));
     }, [input]);
@@ -62,10 +66,48 @@ const PostJob = () => {
         setInput({ ...input, [name]: value });
     };
 
+    // AI Auto-Write Job Description & Tech Stack Handler
+    const handleAutoGenerateJobWithAI = async () => {
+        if (!input.title.trim()) {
+            toast.error("Please enter a Job Title first (e.g. 'Senior Full Stack Engineer') so AI can write the posting.");
+            return;
+        }
+        try {
+            setGeneratingAI(true);
+            const selectedCompany = companies.find(c => c._id === input.companyId);
+            const res = await axios.post(
+                `${AI_API_END_POINT}/generate-job-description`,
+                {
+                    title: input.title,
+                    companyName: selectedCompany?.name || "our organization",
+                    jobType: input.jobType || "Full-Time",
+                    experience: input.experience || "1",
+                    location: input.location || "Bengaluru"
+                },
+                { withCredentials: true }
+            );
+
+            if (res.data.success) {
+                setInput(prev => ({
+                    ...prev,
+                    description: res.data.description || prev.description,
+                    requirements: res.data.requirements || prev.requirements,
+                    salary: prev.salary || res.data.suggestedSalary || "10-15",
+                    experience: prev.experience !== "" ? prev.experience : (res.data.suggestedExperience || "1"),
+                    location: prev.location || "Bengaluru"
+                }));
+                toast.success("✨ Job Description & Tech Stack auto-generated with AI!");
+            }
+        } catch (error) {
+            toast.error(error.response?.data?.message || "Failed to generate job description with AI.");
+        } finally {
+            setGeneratingAI(false);
+        }
+    };
+
     const submitHandler = async (e) => {
         e.preventDefault();
 
-        // Validation checks
         if (!input.title.trim()) {
             toast.error("Please enter a Job Title.");
             return;
@@ -103,7 +145,6 @@ const PostJob = () => {
             return;
         }
 
-        // Format data to match backend schema strictly (experience as Number, position as Number)
         const formattedData = {
             ...input,
             experience: Number(input.experience),
@@ -120,7 +161,6 @@ const PostJob = () => {
             });
             if (res.data.success) {
                 toast.success(res.data.message);
-                // Clear localStorage upon successful submission
                 localStorage.removeItem(LOCAL_STORAGE_KEY);
                 navigate("/admin/jobs");
             }
@@ -138,17 +178,30 @@ const PostJob = () => {
             <div className='max-w-4xl mx-auto px-4 sm:px-6 mt-10'>
                 <form onSubmit={submitHandler} className='bg-white border border-gray-100 rounded-3xl p-8 sm:p-10 shadow-sm space-y-8'>
 
-                    {/* Header Section */}
-                    <div className='border-b border-gray-100 pb-6 flex items-center justify-between'>
+                    {/* Header Section with AI Auto-Write Button */}
+                    <div className='border-b border-gray-100 pb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
                         <div className='flex items-center gap-3'>
-                            <div className='w-12 h-12 rounded-2xl bg-purple-50 text-[#6A38C2] flex items-center justify-center'>
+                            <div className='w-12 h-12 rounded-2xl bg-purple-50 text-[#6A38C2] flex items-center justify-center shrink-0'>
                                 <Briefcase className='w-6 h-6' />
                             </div>
                             <div>
                                 <h1 className='text-2xl font-bold text-gray-900'>Post a New Job</h1>
-                                <p className='text-xs text-muted-foreground mt-0.5'>All fields are mandatory. Form data persists automatically if refreshed.</p>
+                                <p className='text-xs text-muted-foreground mt-0.5'>Enter a job title and click "Auto-Write Job with AI" to generate description & skills instantly.</p>
                             </div>
                         </div>
+
+                        <Button
+                            type="button"
+                            onClick={handleAutoGenerateJobWithAI}
+                            disabled={generatingAI}
+                            className="rounded-xl bg-gradient-to-r from-[#6A38C2] to-indigo-600 hover:opacity-95 text-white text-xs font-semibold h-10 px-4 shadow-sm cursor-pointer shrink-0"
+                        >
+                            {generatingAI ? (
+                                <><Loader2 className='w-4 h-4 mr-1.5 animate-spin' /> Writing Job with AI...</>
+                            ) : (
+                                <><Sparkles className='w-4 h-4 mr-1.5 text-amber-300' /> Auto-Write Job with AI</>
+                            )}
+                        </Button>
                     </div>
 
                     {/* Form Grid Section */}
@@ -162,7 +215,7 @@ const PostJob = () => {
                             <Input
                                 type="text"
                                 name="title"
-                                placeholder="e.g. Software QA Engineer"
+                                placeholder="e.g. Senior Full Stack Developer"
                                 value={input.title}
                                 onChange={changeEventHandler}
                                 className="h-11 rounded-xl border-gray-200 focus-visible:ring-1 focus-visible:ring-[#6A38C2]"
@@ -198,13 +251,24 @@ const PostJob = () => {
 
                         {/* Description */}
                         <div className='col-span-1 md:col-span-2 space-y-2'>
-                            <Label className='text-sm font-semibold text-gray-700 flex items-center gap-2'>
-                                <FileText className='w-4 h-4 text-[#6A38C2]' /> Job Description <span className='text-red-500'>*</span>
-                            </Label>
+                            <div className='flex items-center justify-between'>
+                                <Label className='text-sm font-semibold text-gray-700 flex items-center gap-2'>
+                                    <FileText className='w-4 h-4 text-[#6A38C2]' /> Job Description <span className='text-red-500'>*</span>
+                                </Label>
+                                <button
+                                    type="button"
+                                    onClick={handleAutoGenerateJobWithAI}
+                                    disabled={generatingAI}
+                                    className="text-xs font-semibold text-[#6A38C2] hover:underline flex items-center gap-1 cursor-pointer"
+                                >
+                                    <Sparkles className="w-3.5 h-3.5" />
+                                    {generatingAI ? "Generating..." : "Generate Description & Skills with AI"}
+                                </button>
+                            </div>
                             <textarea
                                 name="description"
-                                rows="4"
-                                placeholder="Describe the role, responsibilities, and team culture..."
+                                rows="6"
+                                placeholder="Describe the role, responsibilities, and team culture (or click Auto-Write Job with AI)..."
                                 value={input.description}
                                 onChange={changeEventHandler}
                                 className="w-full rounded-xl border border-gray-200 p-3 text-sm focus:outline-none focus:ring-1 focus:ring-[#6A38C2] text-gray-800 resize-none shadow-xs"
@@ -214,12 +278,12 @@ const PostJob = () => {
                         {/* Requirements */}
                         <div className='col-span-1 md:col-span-2 space-y-2'>
                             <Label className='text-sm font-semibold text-gray-700 flex items-center gap-2'>
-                                <CheckCircle2 className='w-4 h-4 text-[#6A38C2]' /> Requirements & Tech Stack <span className='text-red-500'>*</span>
+                                <CheckCircle2 className='w-4 h-4 text-[#6A38C2]' /> Requirements & Tech Stack (comma-separated) <span className='text-red-500'>*</span>
                             </Label>
                             <Input
                                 type="text"
                                 name="requirements"
-                                placeholder="e.g. Postman, Appium, Selenium, Bug Tracking"
+                                placeholder="e.g. React.js, Node.js, TypeScript, MongoDB, Docker, AWS"
                                 value={input.requirements}
                                 onChange={changeEventHandler}
                                 className="h-11 rounded-xl border-gray-200 focus-visible:ring-1 focus-visible:ring-[#6A38C2]"
@@ -262,6 +326,7 @@ const PostJob = () => {
                                         <SelectItem value="Mumbai">Mumbai</SelectItem>
                                         <SelectItem value="Hyderabad">Hyderabad</SelectItem>
                                         <SelectItem value="Pune">Pune</SelectItem>
+                                        <SelectItem value="Delhi NCR">Delhi NCR</SelectItem>
                                         <SelectItem value="Remote">Remote</SelectItem>
                                     </SelectGroup>
                                 </SelectContent>
@@ -335,7 +400,7 @@ const PostJob = () => {
                                 <Loader2 className='mr-2 h-5 w-5 animate-spin' /> Publishing Job...
                             </Button>
                         ) : (
-                            <Button type="submit" className="w-full h-12 rounded-xl bg-[#7209b7] hover:bg-[#5f32ad] text-white font-semibold shadow-md transition-all">
+                            <Button type="submit" className="w-full h-12 rounded-xl bg-[#7209b7] hover:bg-[#5f32ad] text-white font-semibold shadow-md transition-all cursor-pointer">
                                 Post New Job
                             </Button>
                         )}

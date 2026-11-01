@@ -22,7 +22,7 @@ const Signup = () => {
         role: "",
         file: ""
     });
-    const {loading,user} = useSelector(store=>store.auth);
+    const { loading, user } = useSelector(store => store.auth);
     const dispatch = useDispatch();
     const navigate = useNavigate();
 
@@ -34,7 +34,11 @@ const Signup = () => {
     }
     const submitHandler = async (e) => {
         e.preventDefault();
-        const formData = new FormData();    //formdata object
+        if (!input.fullname || !input.email || !input.phoneNumber || !input.password || !input.role) {
+            toast.error("Please fill in all required fields and select a role.");
+            return;
+        }
+        const formData = new FormData();
         formData.append("fullname", input.fullname);
         formData.append("email", input.email);
         formData.append("phoneNumber", input.phoneNumber);
@@ -56,22 +60,22 @@ const Signup = () => {
             }
         } catch (error) {
             console.log(error);
-            toast.error(error.response.data.message);
-        } finally{
+            toast.error(error.response?.data?.message || "Registration failed. Please try again.");
+        } finally {
             dispatch(setLoading(false));
         }
     }
 
-    useEffect(()=>{
-        if(user){
+    useEffect(() => {
+        if (user) {
             navigate("/");
         }
-    },[])
+    }, [user, navigate])
     return (
         <div>
             <Navbar />
-            <div className='flex items-center justify-center max-w-7xl mx-auto'>
-                <form onSubmit={submitHandler} className='w-1/2 border border-gray-200 rounded-md p-4 my-10'>
+            <div className='flex items-center justify-center max-w-7xl mx-auto px-4'>
+                <form onSubmit={submitHandler} className='w-full sm:w-1/2 border border-gray-200 rounded-md p-4 my-10'>
                     <h1 className='font-bold text-xl mb-5'>Sign Up</h1>
                     <div className='my-2'>
                         <Label>Full Name</Label>
@@ -80,7 +84,8 @@ const Signup = () => {
                             value={input.fullname}
                             name="fullname"
                             onChange={changeEventHandler}
-                            placeholder="patel"
+                            placeholder="Patel"
+                            required
                         />
                     </div>
                     <div className='my-2'>
@@ -91,6 +96,7 @@ const Signup = () => {
                             name="email"
                             onChange={changeEventHandler}
                             placeholder="patel@gmail.com"
+                            required
                         />
                     </div>
                     <div className='my-2'>
@@ -101,6 +107,7 @@ const Signup = () => {
                             name="phoneNumber"
                             onChange={changeEventHandler}
                             placeholder="8080808080"
+                            required
                         />
                     </div>
                     <div className='my-2'>
@@ -110,13 +117,15 @@ const Signup = () => {
                             value={input.password}
                             name="password"
                             onChange={changeEventHandler}
-                            placeholder="patel@gmail.com"
+                            placeholder="••••••••"
+                            required
                         />
                     </div>
-                    <div className='flex items-center justify-between'>
+                    <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
                         <RadioGroup className="flex items-center gap-4 my-5">
                             <div className="flex items-center space-x-2">
                                 <Input
+                                    id="signup-student"
                                     type="radio"
                                     name="role"
                                     value="student"
@@ -124,10 +133,11 @@ const Signup = () => {
                                     onChange={changeEventHandler}
                                     className="cursor-pointer"
                                 />
-                                <Label htmlFor="r1">Student</Label>
+                                <Label htmlFor="signup-student" className="cursor-pointer">Student</Label>
                             </div>
                             <div className="flex items-center space-x-2">
                                 <Input
+                                    id="signup-recruiter"
                                     type="radio"
                                     name="role"
                                     value="recruiter"
@@ -135,7 +145,7 @@ const Signup = () => {
                                     onChange={changeEventHandler}
                                     className="cursor-pointer"
                                 />
-                                <Label htmlFor="r2">Recruiter</Label>
+                                <Label htmlFor="signup-recruiter" className="cursor-pointer">Recruiter</Label>
                             </div>
                         </RadioGroup>
                         <div className='flex items-center gap-2'>
@@ -149,7 +159,7 @@ const Signup = () => {
                         </div>
                     </div>
                     {
-                        loading ? <Button className="w-full my-4"> <Loader2 className='mr-2 h-4 w-4 animate-spin' /> Please wait </Button> : <Button type="submit" className="w-full my-4">Signup</Button>
+                        loading ? <Button disabled className="w-full my-4"> <Loader2 className='mr-2 h-4 w-4 animate-spin' /> Please wait </Button> : <Button type="submit" className="w-full my-4">Signup</Button>
                     }
                     <span className='text-sm'>Already have an account? <Link to="/login" className='text-blue-600'>Login</Link></span>
                 </form>

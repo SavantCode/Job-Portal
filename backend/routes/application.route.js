@@ -7,7 +7,8 @@ import {
     updateStatus,
     withdrawApplication,
     executeHiringStageAction,
-    submitCandidateAssignment
+    submitCandidateAssignment,
+    respondToOffer
 } from "../controllers/application.controller.js";
 
 const router = express.Router();
@@ -20,5 +21,6 @@ router.route("/:id/applicants").get(isAuthenticated, getApplicants);
 router.route("/status/:id/update").post(isAuthenticated, updateStatus);
 router.route("/:id/hiring-action").post(isAuthenticated, executeHiringStageAction);
 router.route("/:id/submit-assignment").post(isAuthenticated, submitCandidateAssignment);
+router.route("/:id/respond-offer").post(isAuthenticated, respondToOffer);
 
 export default router;

@@ -2,22 +2,24 @@ import React, { useEffect, useState } from 'react'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from './ui/dialog'
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { AI_API_END_POINT, APPLICATION_API_END_POINT, JOB_API_END_POINT } from '@/utils/constant';
-import { setSingleJob } from '@/redux/jobSlice';
+import { setAllAppliedJobs, setSingleJob } from '@/redux/jobSlice';
 import { useDispatch, useSelector } from 'react-redux';
 import { toast } from 'sonner';
 import {
     Briefcase, MapPin, IndianRupee, Clock, Users, Building2,
     CheckCircle2, Calendar, Sparkles, Loader2, Target, AlertCircle,
-    HelpCircle, ChevronDown, ChevronUp, RotateCcw, Copy, Check
+    RotateCcw, Copy, Check, FileText, Award
 } from 'lucide-react';
 import Navbar from './shared/Navbar';
+import MockInterviewSimulator from './MockInterviewSimulator';
 
 const JobDescription = () => {
-    const { singleJob } = useSelector(store => store.job);
+    const { singleJob, allAppliedJobs = [] } = useSelector(store => store.job);
     const { user } = useSelector(store => store.auth);
+    const navigate = useNavigate();
 
     const userApplication = singleJob?.applications?.find(
         app => (app.applicant?._id || app.applicant) === user?._id
@@ -34,20 +36,21 @@ const JobDescription = () => {
     const [generatingNote, setGeneratingNote] = useState(false);
     const [copiedNote, setCopiedNote] = useState(false);
 
-    // ATS Match Score State
+    // ATS Match Score + AI Resume Bullet Improver State
     const [atsData, setAtsData] = useState(null);
     const [loadingAts, setLoadingAts] = useState(false);
+    const [resumeBullets, setResumeBullets] = useState([]);
+    const [loadingBullets, setLoadingBullets] = useState(false);
+    const [copiedBulletIdx, setCopiedBulletIdx] = useState(-1);
 
-    // AI Mock Interview Prep State
+    // AI Mock Interview Simulator State
     const [interviewQuestions, setInterviewQuestions] = useState([]);
     const [loadingInterview, setLoadingInterview] = useState(false);
-    const [expandedQ, setExpandedQ] = useState(0);
 
     const params = useParams();
     const jobId = params.id;
     const dispatch = useDispatch();
 
-    // Fetch Job + ATS Match Score
     useEffect(() => {
         const fetchSingleJob = async () => {
             try {
@@ -65,6 +68,7 @@ const JobDescription = () => {
         };
 
         const fetchAtsScore = async () => {
+            if (!user) return;
             try {
                 setLoadingAts(true);
                 const res = await axios.get(`${AI_API_END_POINT}/ats-match/${jobId}`, { withCredentials: true });
@@ -82,7 +86,17 @@ const JobDescription = () => {
         fetchAtsScore();
     }, [jobId, dispatch, user?._id]);
 
+    const requireAuth = () => {
+        if (!user) {
+            toast.error("Please login first to continue.");
+            navigate("/login");
+            return false;
+        }
+        return true;
+    };
+
     const generateJobCoverLetter = async () => {
+        if (!requireAuth()) return;
         try {
             setGeneratingNote(true);
             const res = await axios.post(`${AI_API_END_POINT}/generate-cover-letter/${jobId}`, {}, { withCredentials: true });
@@ -97,7 +111,31 @@ const JobDescription = () => {
         }
     };
 
+    const handleGenerateResumeBullets = async () => {
+        if (!requireAuth()) return;
+        try {
+            setLoadingBullets(true);
+            const res = await axios.post(
+                `${AI_API_END_POINT}/resume-bullets/${jobId}`,
+                {
+                    missingSkills: atsData?.missingSkills || [],
+                    matchedSkills: atsData?.matchedSkills || []
+                },
+                { withCredentials: true }
+            );
+            if (res.data.success) {
+                setResumeBullets(res.data.bullets || []);
+                toast.success("✨ Generated 3 ATS-optimized resume bullet points!");
+            }
+        } catch (error) {
+            toast.error("Failed to generate resume bullet points.");
+        } finally {
+            setLoadingBullets(false);
+        }
+    };
+
     const submitApplicationHandler = async () => {
+        if (!requireAuth()) return;
         try {
             setLoading(true);
             const res = await axios.post(
@@ -109,7 +147,7 @@ const JobDescription = () => {
             if (res.data.success) {
                 setIsApplied(true);
                 setApplyModalOpen(false);
-                const newApp = res.data.application || { applicant: user?._id, status: 'pending', coverNote };
+                const newApp = res.data.application || { applicant: user?._id, status: 'pending', hiringStage: 'applied', coverNote };
                 const updatedSingleJob = {
                     ...singleJob,
                     applications: [...(singleJob?.applications || []), newApp]
@@ -125,9 +163,11 @@ const JobDescription = () => {
     };
 
     const withdrawJobHandler = async () => {
+        if (!requireAuth()) return;
         try {
             setWithdrawing(true);
-            const res = await axios.delete(`${APPLICATION_API_END_POINT}/withdraw/${jobId}`, { withCredentials: true });
+            const targetId = userApplication?._id || jobId;
+            const res = await axios.delete(`${APPLICATION_API_END_POINT}/withdraw/${targetId}`, { withCredentials: true });
             if (res.data.success) {
                 setIsApplied(false);
                 const updatedSingleJob = {
@@ -137,6 +177,9 @@ const JobDescription = () => {
                     )
                 };
                 dispatch(setSingleJob(updatedSingleJob));
+                if (allAppliedJobs.length > 0) {
+                    dispatch(setAllAppliedJobs(allAppliedJobs.filter(a => a._id !== userApplication?._id && (a.job?._id || a.job) !== jobId)));
+                }
                 toast.success(res.data.message);
             }
         } catch (error) {
@@ -147,13 +190,13 @@ const JobDescription = () => {
     };
 
     const handleGenerateInterviewPrep = async () => {
+        if (!requireAuth()) return;
         try {
             setLoadingInterview(true);
             const res = await axios.post(`${AI_API_END_POINT}/interview-prep/${jobId}`, {}, { withCredentials: true });
             if (res.data.success) {
                 setInterviewQuestions(res.data.questions || []);
-                setExpandedQ(0);
-                toast.success("Generated 5 role-specific interview questions!");
+                toast.success("Loaded 5 interactive mock interview questions!");
             }
         } catch (error) {
             toast.error("Failed to generate interview questions.");
@@ -169,6 +212,9 @@ const JobDescription = () => {
         toast.success("Copied cover letter!");
         setTimeout(() => setCopiedNote(false), 2000);
     };
+
+    const currentStage = userApplication?.hiringStage || userApplication?.status || 'pending';
+    const canWithdraw = isApplied && (!userApplication?.status || userApplication?.status === 'pending') && (!userApplication?.hiringStage || userApplication?.hiringStage === 'applied');
 
     return (
         <div className='min-h-screen bg-gray-50/40 pb-20'>
@@ -204,11 +250,13 @@ const JobDescription = () => {
                             </div>
                         </div>
 
-                        {/* Apply / Withdraw Action Buttons */}
+                        {/* Apply / Withdraw / Offer Response Action Buttons */}
                         <div className='flex flex-wrap items-center gap-2.5'>
                             {!isApplied ? (
                                 <Button
-                                    onClick={() => setApplyModalOpen(true)}
+                                    onClick={() => {
+                                        if (requireAuth()) setApplyModalOpen(true);
+                                    }}
                                     disabled={loading}
                                     className='h-11 px-7 rounded-full font-semibold bg-[#7209b7] hover:bg-[#5f32ad] text-white shadow-md shadow-purple-500/20 cursor-pointer'
                                 >
@@ -221,9 +269,17 @@ const JobDescription = () => {
                                         className='h-10 px-5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200'
                                     >
                                         <CheckCircle2 className='w-4 h-4 text-emerald-600 mr-1.5' />
-                                        Applied ({(userApplication?.status || 'pending').toUpperCase()})
+                                        Applied ({String(currentStage).replace(/_/g, " ").toUpperCase()})
                                     </Button>
-                                    {(!userApplication?.status || userApplication?.status === 'pending') && (
+                                    {userApplication?.hiringStage === 'offer_sent' && (
+                                        <Button
+                                            onClick={() => navigate("/profile")}
+                                            className="h-10 px-4 rounded-full bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold cursor-pointer"
+                                        >
+                                            <Award className="w-3.5 h-3.5 mr-1.5" /> Respond to Offer
+                                        </Button>
+                                    )}
+                                    {canWithdraw && (
                                         <Button
                                             onClick={withdrawJobHandler}
                                             disabled={withdrawing}
@@ -253,8 +309,8 @@ const JobDescription = () => {
                     </div>
                 </div>
 
-                {/* AI Resume Matcher / ATS Score Checker Card */}
-                {user?.role !== 'recruiter' && (
+                {/* AI Resume Matcher / ATS Score Checker + AI Resume Bullet Improver Card */}
+                {user && user?.role !== 'recruiter' && (
                     <div className='bg-gradient-to-br from-purple-50/90 via-white to-indigo-50/60 border border-purple-100 rounded-3xl p-6 sm:p-7 shadow-xs space-y-5'>
                         <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
                             <div className='flex items-center gap-3.5'>
@@ -316,10 +372,12 @@ const JobDescription = () => {
                             </div>
 
                             <div className='bg-white/90 p-3.5 rounded-2xl border border-amber-100'>
-                                <p className='text-xs font-semibold text-amber-800 flex items-center gap-1.5 mb-2'>
-                                    <AlertCircle className='w-3.5 h-3.5 text-amber-600' />
-                                    Missing / Recommended Skills ({atsData?.missingSkills?.length || 0})
-                                </p>
+                                <div className='flex items-center justify-between mb-2'>
+                                    <p className='text-xs font-semibold text-amber-800 flex items-center gap-1.5'>
+                                        <AlertCircle className='w-3.5 h-3.5 text-amber-600' />
+                                        Missing / Recommended Skills ({atsData?.missingSkills?.length || 0})
+                                    </p>
+                                </div>
                                 <div className='flex flex-wrap gap-1.5'>
                                     {atsData?.missingSkills?.length > 0 ? (
                                         atsData.missingSkills.map((skill, idx) => (
@@ -332,6 +390,56 @@ const JobDescription = () => {
                                     )}
                                 </div>
                             </div>
+                        </div>
+
+                        {/* AI Resume Bullet Point Improver */}
+                        <div className='pt-2 border-t border-purple-100/80 space-y-3'>
+                            <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-2'>
+                                <p className='text-xs text-gray-600 font-medium'>
+                                    Want to boost your ATS score for this role? Generate 3 quantifiable resume bullet points tailored to these skills:
+                                </p>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={loadingBullets}
+                                    onClick={handleGenerateResumeBullets}
+                                    className="h-8 text-xs rounded-xl bg-white border-purple-200 text-[#6A38C2] hover:bg-purple-50 font-semibold shrink-0 cursor-pointer"
+                                >
+                                    {loadingBullets ? (
+                                        <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Writing Bullets...</>
+                                    ) : (
+                                        <><Sparkles className="w-3.5 h-3.5 mr-1.5" /> Generate ATS Resume Bullets</>
+                                    )}
+                                </Button>
+                            </div>
+
+                            {resumeBullets.length > 0 && (
+                                <div className='space-y-2 bg-white p-4 rounded-2xl border border-purple-100'>
+                                    <p className='text-[11px] font-bold uppercase tracking-wider text-[#6A38C2] flex items-center gap-1.5'>
+                                        <FileText className="w-3.5 h-3.5" /> Tailored Resume Bullet Points (Click to Copy)
+                                    </p>
+                                    {resumeBullets.map((b, idx) => (
+                                        <div
+                                            key={idx}
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(b);
+                                                setCopiedBulletIdx(idx);
+                                                toast.success("Copied bullet point to clipboard!");
+                                                setTimeout(() => setCopiedBulletIdx(-1), 1800);
+                                            }}
+                                            className='p-2.5 rounded-xl bg-purple-50/40 hover:bg-purple-50 border border-purple-100/80 text-xs text-gray-800 flex items-start justify-between gap-3 cursor-pointer transition-all'
+                                        >
+                                            <span className="leading-relaxed">• {b}</span>
+                                            {copiedBulletIdx === idx ? (
+                                                <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                                            ) : (
+                                                <Copy className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}
@@ -383,6 +491,7 @@ const JobDescription = () => {
                             variant="outline"
                             size="sm"
                             onClick={() => {
+                                if (!requireAuth()) return;
                                 setApplyModalOpen(true);
                                 if (!coverNote) generateJobCoverLetter();
                             }}
@@ -413,68 +522,17 @@ const JobDescription = () => {
                     )}
                 </div>
 
-                {/* AI Mock Interview Prep Section */}
-                <div className='bg-white border border-gray-100 rounded-3xl p-6 sm:p-8 shadow-xs space-y-5'>
-                    <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
-                        <div className='flex items-center gap-3'>
-                            <div className='w-10 h-10 rounded-xl bg-purple-50 text-[#6A38C2] flex items-center justify-center shrink-0'>
-                                <HelpCircle className='w-5 h-5' />
-                            </div>
-                            <div>
-                                <h2 className='text-lg font-bold text-gray-900'>AI Mock Interview Prep</h2>
-                                <p className='text-xs text-muted-foreground'>
-                                    Practice 5 tailored technical & behavioral questions for {singleJob?.title || "this role"}.
-                                </p>
-                            </div>
-                        </div>
-                        <Button
-                            onClick={handleGenerateInterviewPrep}
-                            disabled={loadingInterview}
-                            className="rounded-xl bg-[#6A38C2] hover:bg-[#5b30a6] text-white text-xs font-semibold cursor-pointer"
-                        >
-                            {loadingInterview ? (
-                                <><Loader2 className='w-3.5 h-3.5 mr-1.5 animate-spin' /> Generating Questions...</>
-                            ) : (
-                                <><Sparkles className='w-3.5 h-3.5 mr-1.5' /> {interviewQuestions.length > 0 ? "Regenerate Questions" : "Generate 5 Interview Questions"}</>
-                            )}
-                        </Button>
-                    </div>
-
-                    {interviewQuestions.length > 0 && (
-                        <div className='space-y-3 pt-2'>
-                            {interviewQuestions.map((item, idx) => {
-                                const isOpen = expandedQ === idx;
-                                return (
-                                    <div key={idx} className='border border-gray-200/80 rounded-2xl overflow-hidden'>
-                                        <button
-                                            type="button"
-                                            onClick={() => setExpandedQ(isOpen ? -1 : idx)}
-                                            className='w-full p-4 text-left bg-gray-50/60 hover:bg-gray-50 flex items-center justify-between gap-3 cursor-pointer'
-                                        >
-                                            <div className='flex items-center gap-2.5'>
-                                                <Badge className='bg-purple-100 text-[#6A38C2] border-none text-[10px] shrink-0'>
-                                                    {item.type || "Question"}
-                                                </Badge>
-                                                <span className='font-semibold text-sm text-gray-900'>{item.question}</span>
-                                            </div>
-                                            {isOpen ? <ChevronUp className='w-4 h-4 text-gray-400 shrink-0' /> : <ChevronDown className='w-4 h-4 text-gray-400 shrink-0' />}
-                                        </button>
-                                        {isOpen && (
-                                            <div className='p-4 bg-white space-y-2 text-xs text-gray-700 border-t border-gray-100'>
-                                                <p className='leading-relaxed'><strong className='text-gray-900'>Sample Answer Strategy:</strong> {item.answer}</p>
-                                                {item.tip && (
-                                                    <p className='text-[#6A38C2] bg-purple-50/70 px-3 py-2 rounded-xl font-medium'>
-                                                        💡 Pro Tip: {item.tip}
-                                                    </p>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
-                </div>
+                {/* Interactive AI Mock Interview Simulator (Voice + Text Q&A with Instant Grading) */}
+                <MockInterviewSimulator
+                    jobId={jobId}
+                    jobTitle={singleJob?.title || "Software Engineer"}
+                    companyName={singleJob?.company?.name || "Enterprise Corp"}
+                    candidateName={user?.fullname || "Candidate"}
+                    questions={interviewQuestions}
+                    loadingQuestions={loadingInterview}
+                    onGenerateQuestions={handleGenerateInterviewPrep}
+                    requireAuth={requireAuth}
+                />
 
             </div>
 
