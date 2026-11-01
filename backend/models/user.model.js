@@ -11,7 +11,7 @@ const userSchema = new mongoose.Schema({
         unique: true
     },
     phoneNumber: {
-        type: Number,
+        type: String,
         required: true
     },
     password: {
@@ -34,7 +34,6 @@ const userSchema = new mongoose.Schema({
             default: ""
         }
     },
-    // ---> ADD THIS FIELD (Defaults to an empty array) <---
     savedJobs: [
         {
             type: mongoose.Schema.Types.ObjectId,

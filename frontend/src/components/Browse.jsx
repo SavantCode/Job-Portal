@@ -37,12 +37,6 @@ const Browse = () => {
         setLocalSearch(searchedQuery || "");
     }, [searchedQuery]);
 
-    useEffect(() => {
-        return () => {
-            dispatch(setSearchedQuery(""));
-        }
-    }, [dispatch]);
-
     // Client-side filter refinement so typing or clicking category pills updates results immediately
     const displayedJobs = useMemo(() => {
         const q = (localSearch || "").trim().toLowerCase();

@@ -1,74 +1,37 @@
-# 🛠️ Project Issues & Bug Fix Tracker
+# 🛠️ JobPortal — Full-Stack Issues & Bug Fix Tracker
 
-This document tracks all bugs, edge cases, and architectural improvements identified and resolved across the **Job Portal** codebase.
-
----
-
-## ✅ Batch 1: Core Hiring Workflow, Auth & Filtering Bugs (Resolved)
-
-### 1. Missing Offer Accept / Reject ("Decline") Controls in Notifications (`Notifications.jsx`)
-- **Problem:** When a candidate received an Offer Letter notification in `/notifications` and clicked **"Inspect Details"**, the modal displayed the offer summary and A4 PDF print button, but had **no buttons to Accept or Decline the offer**—forcing the user to navigate away.
-- **Resolution:** Added a direct **Accept Offer / Decline Offer** digital signature panel inside the Notification Inspector modal (as well as direct **Submit Assignment** input for assignment notifications) and synced state across Redux.
-
-### 2. Hidden Offer Response Card in Profile (`AppliedJobTable.jsx`)
-- **Problem:** In `AppliedJobTable.jsx`, the Offer Letter & Accept/Decline panel was gated strictly on `activeAppModal.offerDetails?.ctc`. If `ctc` was omitted or the stage was changed to `offer_sent`, the Accept/Decline buttons did not render. Additionally, declining an offer required a signature string.
-- **Resolution:** Added an explicit **"Accept / Decline Offer"** action button in the table row when `hiringStage === "offer_sent"`, broadened the modal check (`hasOfferSection`), and allowed 1-click offer rejection without blocking on signature validation.
-
-### 3. Missing `isAuthenticated` Middleware on Candidate AI Routes (`backend/routes/ai.route.js`)
-- **Problem:** `/generate-cover-letter/:jobId?`, `/ats-match/:jobId`, `/interview-prep/:jobId`, and `/resume-bullets/:jobId` did not include `isAuthenticated` middleware, leaving `req.id` undefined.
-- **Resolution:** Added `isAuthenticated` middleware to all AI routes and added a safe JWT fallback (`resolveUserId`) in `backend/controllers/ai.controller.js`.
-
-### 4. Application Withdraw Endpoint ID Mismatch (`JobDescription.jsx` vs `AppliedJobTable.jsx`)
-- **Problem:** `JobDescription.jsx` passed `jobId` to `DELETE /api/v1/application/withdraw/:id`, while `AppliedJobTable.jsx` passed `applicationId`. Also, withdrawing from `JobDescription.jsx` didn't update `allAppliedJobs` in Redux.
-- **Resolution:** Standardized `withdrawJobHandler` to pass `userApplication?._id || jobId` and synchronize both `singleJob` and `allAppliedJobs` in Redux.
-
-### 5. Guest Users Blocked from Viewing Job Descriptions (`backend/routes/job.route.js`)
-- **Problem:** `GET /api/v1/job/get/:id` required `isAuthenticated`, causing unauthenticated visitors clicking "Details" on any job card to hit a `401 Unauthorized` error.
-- **Resolution:** Made `GET /api/v1/job/get/:id` public while adding clean `requireAuth()` guards on interactive actions ("Apply Now", "Save For Later", and AI tools).
-
-### 6. Salary Filter Range Mismatch (`Jobs.jsx` & `useGetAllJobs.jsx`)
-- **Problem:** Filtering by salary in `Jobs.jsx` used `jobSal.includes(jobFilters.salary)`, which failed whenever a job had a single numeric salary like `"12"` LPA and the user selected `"10-15"` LPA. Also, `useGetAllJobs.jsx` was missing `searchedQuery` in its `useEffect` dependency array.
-- **Resolution:** Implemented `matchesSalaryFilter()` in `Jobs.jsx` to parse numeric and range overlaps, and updated `useGetAllJobs.jsx` dependencies.
-
-### 7. Recruiter Analytics & Auth Form Crash Fixes (`AdminJobs.jsx`, `Login.jsx`, `Signup.jsx`, `CompanyCreate.jsx`, `Profile.jsx`)
-- **Problem:**
-  - `AdminJobs.jsx` only checked `app.status` instead of `app.hiringStage` for conversion metrics.
-  - `Login.jsx` and `Signup.jsx` accessed `error.response.data.message` without optional chaining and had email placeholders on password inputs.
-  - `CompanyCreate.jsx` swallowed errors silently in `catch`.
-  - `Profile.jsx` re-triggered `loadingSavedJobs` flicker whenever a job was unsaved.
-- **Resolution:** Fixed all 5 components with proper optional chaining, validation toasts, multi-stage analytics, and flicker-free state updates.
+This document tracks all bugs, security vulnerabilities, and UI/UX edge cases discovered across the **Backend** and **Frontend**, along with their resolution status.
 
 ---
 
-## ✅ Batch 2: Interactive AI Mock Interview Simulator (Resolved)
+## ✅ Newly Identified & Fixed Bugs (Latest Audit)
 
-### 8. Static Interview Prep Upgraded to Voice + Text Simulator (`MockInterviewSimulator.jsx`, `ai.controller.js`, `printDocument.js`)
-- **Enhancement:** Upgraded static interview questions into a full **5-Round Interactive AI Mock Interview Simulator** supporting:
-  - **Live Voice Interview Mode** (`window.SpeechRecognition` + `window.speechSynthesis`)
-  - **Structured Text Q&A Mode**
-  - **Instant 10-Point AI Rubric Evaluation** (`POST /api/v1/ai/evaluate-interview-answer`)
-  - **Executive Interview Readiness Report & A4 PDF Export** (`printMockInterviewReport`)
+### Backend Fixes
+| ID | File(s) | Bug / Issue Description | Resolution | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **BUG-BE-01** | `backend/middlewares/isAuthenticated.js`, `company.route.js`, `job.route.js`, `application.route.js` | **Missing Role-Based Access Control (`isRecruiter`)**: Recruiter-only routes (`/job/post`, `/job/update/:id`, `/job/delete/:id`, `/company/register`, `/company/update/:id`, `/application/:id/applicants`, `/application/status/:id/update`, `/application/:id/hiring-action`) only checked `isAuthenticated`. A logged-in student could invoke recruiter APIs directly. | Added `isRecruiter` middleware with DB role verification fallback and attached it to all recruiter/admin routes. | ✅ **FIXED** |
+| **BUG-BE-02** | `backend/models/user.model.js` | **`phoneNumber` Schema Type `Number` CastError**: Storing `phoneNumber` as a `Number` caused Mongoose `CastError` when users entered `+91`, spaces, or dashes, and stripped leading zeros. | Changed `phoneNumber` schema type from `Number` to `String`. | ✅ **FIXED** |
+| **BUG-BE-03** | `backend/middlewares/mutler.js` | **Unbounded In-Memory File Upload**: `multer.memoryStorage()` had no `fileSize` limit, allowing large uploads to exhaust Node.js RAM. | Added `limits: { fileSize: 10 * 1024 * 1024 }` (10 MB cap) to `singleUpload`. | ✅ **FIXED** |
+
+### Frontend Fixes
+| ID | File(s) | Bug / Issue Description | Resolution | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **BUG-FE-01** | `frontend/src/index.css`, `HeroSection.jsx`, `Footer.jsx`, `Navbar.jsx` | **Tailwind v4 Utility Classes in Tailwind v3 Project**: Classes like `shadow-2xs`, `shadow-xs`, `focus:outline-hidden`, `py-0.2`, and suffix important modifiers (`bg-transparent! border-none!`) were not generating CSS in Tailwind v3. | Added compatibility utilities in `index.css` for `.shadow-2xs`, `.shadow-xs`, `.focus:outline-hidden`, `.py-0.2`, and converted suffix `!` modifiers to prefix `!bg-transparent !border-none`. | ✅ **FIXED** |
+| **BUG-FE-02** | `frontend/src/components/shared/Navbar.jsx` | **Cross-User Redux Persist Data Leak on Logout**: Logging out only cleared `auth.user`, leaving `allAppliedJobs`, `allAdminJobs`, `companies`, `applicants`, and `notifications` in `localStorage` for the next user on the same browser. | Dispatched reset actions for `job`, `company`, `application`, and `notification` slices inside `logoutHandler`. | ✅ **FIXED** |
+| **BUG-FE-03** | `frontend/src/components/shared/Navbar.jsx` | **Missing Mobile Navigation Menu**: `<nav className="hidden md:block">` hid all navigation links on mobile viewports (`< 768px`) with no mobile toggle button or drawer. | Added a responsive mobile menu toggle button and collapsible navigation drawer in `Navbar.jsx`. | ✅ **FIXED** |
+| **BUG-FE-04** | `frontend/src/components/JobDescription.jsx` | **Stale Job & AI State Flash Between Job Pages**: Navigating from Job A to Job B briefly displayed Job A's `atsData`, `resumeBullets`, `interviewQuestions`, and `isApplied` state until the network call finished. | Reset `atsData`, `resumeBullets`, `interviewQuestions`, and `coverNote` on `jobId` change and verified `singleJob._id === jobId` before computing initial application status. | ✅ **FIXED** |
+| **BUG-FE-05** | `frontend/src/components/admin/PostJob.jsx` | **`PostJob.jsx` Hardcoded Select Options vs. AI Auto-Write**: `PostJob` didn't fetch companies on mount (`useGetAllCompanies()` was missing if visiting `/admin/jobs/create` directly) and couldn't display custom AI-suggested salary or experience values if they weren't in the static list. | Added `useGetAllCompanies()` on mount and dynamically merged any custom/AI salary, location, or experience values into the `<Select>` options. | ✅ **FIXED** |
+| **BUG-FE-06** | `frontend/src/components/shared/Footer.jsx` | **Misaligned Twitter Social Icon**: The Twitter `<a>` tag had `className="w-4 h-4"` instead of the circular button classes used on LinkedIn, Facebook, and GitHub. | Applied matching `w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center hover:bg-[#6A38C2] hover:text-white transition-colors` classes. | ✅ **FIXED** |
+| **BUG-FE-07** | `frontend/src/components/Browse.jsx` | **Premature Search Query Reset on Unmount**: `Browse.jsx` cleared `searchedQuery` in an unmount cleanup effect, which could overwrite active searches when navigating to `/jobs`. | Removed the destructive unmount cleanup effect while keeping explicit Reset buttons. | ✅ **FIXED** |
+| **BUG-FE-08** | `frontend/src/utils/printDocument.js` | **Unescaped HTML Interpolation in A4 PDF Print Window**: Candidate name, company name, job title, skills, and offer/joining table fields were interpolated directly into `printWin.document.write()`. | Added `escapeHtml()` sanitizer and applied it across `printA4Letterhead`, `printCandidateCV`, and `printMockInterviewReport`. | ✅ **FIXED** |
+| **BUG-FE-09** | `frontend/src/utils/constant.js` | **Hardcoded Localhost API URL**: All endpoints were hardcoded to `http://localhost:8000/api/v1`. | Added `import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api/v1"` fallback support. | ✅ **FIXED** |
 
 ---
 
-## ✅ Batch 3: State Hygiene, Responsiveness & UX Polish (Resolved)
+## 📜 Previously Resolved Milestones & Features
 
-### 9. Redux-Persist State Leakage on Logout (`Navbar.jsx`)
-- **Problem:** Logging out only cleared `auth.user`, leaving the previous user's `notifications`, `allAppliedJobs`, `allAdminJobs`, and `companies` persisted in `localStorage`.
-- **Resolution:** Dispatched cleanup actions (`clearNotificationsInStore`, `setAllAppliedJobs([])`, `setAllAdminJobs([])`, `setCompanies([])`, `setSingleCompany(null)`, `setAllApplicants(null)`, `resetJobFilters()`) on logout.
-
-### 10. Mobile Navigation & Active Link Highlighting (`Navbar.jsx`)
-- **Problem:** Top navigation links overflowed on mobile screens and didn't highlight the active route.
-- **Resolution:** Added active route styling and a responsive mobile menu popover in `Navbar.jsx`.
-
-### 11. `/browse` Page Responsiveness, Search Bar & Empty State (`Browse.jsx`)
-- **Problem:** `Browse.jsx` used a non-responsive `grid-cols-3`, had no search input or category pills, and showed a blank area when 0 jobs matched.
-- **Resolution:** Rebuilt `Browse.jsx` with a live search bar, clickable popular category pills, active filter badge, responsive `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3` layout, and a clean empty state.
-
-### 12. 1-Click Portal Job Auto-Fill in AI Cover Letter Studio (`AICoverLetterGenerator.jsx`)
-- **Problem:** Users had to manually copy-paste job titles, company names, and descriptions even for jobs already listed on the portal.
-- **Resolution:** Added a **"Quick-Fill from Active Portal Jobs"** dropdown in `AICoverLetterGenerator.jsx` that auto-populates the form in one click.
-
-### 13. Footer Newsletter Feedback & Route Links (`Footer.jsx`, `Home.jsx`)
-- **Problem:** Submitting the newsletter form in `Footer.jsx` did nothing, and several links pointed to `/`. `Home.jsx` had a missing `user` dependency in its recruiter redirect `useEffect`.
-- **Resolution:** Connected all footer links to real application routes, added toast confirmation to the newsletter form, and fixed the `Home.jsx` effect dependency array.
+1. **Multi-Stage Kanban Hiring Pipeline**: Implemented end-to-end stage transitions (`applied`, `shortlisted`, `assignment_sent`, `interview_scheduled`, `interview_passed`, `offer_sent`, `offer_accepted`, `offer_declined`, `hired`, `rejected`) with automated email notifications and in-app alerts.
+2. **Two-Way Offer Letter Digital Signing**: Candidates can digitally sign & accept or decline employment offers from their Candidate Portal, notifying the recruiter in real time.
+3. **Interactive Voice & Text AI Mock Interview Simulator**: 5-question role-specific interview simulator with Web Speech API STT/TTS, 10-point Bar-Raiser rubric grading, and printable A4 readiness reports.
+4. **Live ATS Skill Matcher & XYZ Resume Bullet Generator**: Real-time 0–100% ATS score calculation, matched/missing skill chips, and 1-click quantifiable resume bullet generation.
+5. **Dark Mode & Dynamic Filter Synchronization**: Persistent light/dark theme toggle and live job count badges across City, Tech Stack, Work Type, Experience, and Salary filters.

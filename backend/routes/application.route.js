@@ -1,5 +1,5 @@
 import express from "express";
-import isAuthenticated from "../middlewares/isAuthenticated.js";
+import isAuthenticated, { isRecruiter } from "../middlewares/isAuthenticated.js";
 import {
     applyJob,
     getApplicants,
@@ -17,9 +17,9 @@ const router = express.Router();
 router.route("/apply/:id").get(isAuthenticated, applyJob).post(isAuthenticated, applyJob);
 router.route("/withdraw/:id").delete(isAuthenticated, withdrawApplication);
 router.route("/get").get(isAuthenticated, getAppliedJobs);
-router.route("/:id/applicants").get(isAuthenticated, getApplicants);
-router.route("/status/:id/update").post(isAuthenticated, updateStatus);
-router.route("/:id/hiring-action").post(isAuthenticated, executeHiringStageAction);
+router.route("/:id/applicants").get(isAuthenticated, isRecruiter, getApplicants);
+router.route("/status/:id/update").post(isAuthenticated, isRecruiter, updateStatus);
+router.route("/:id/hiring-action").post(isAuthenticated, isRecruiter, executeHiringStageAction);
 router.route("/:id/submit-assignment").post(isAuthenticated, submitCandidateAssignment);
 router.route("/:id/respond-offer").post(isAuthenticated, respondToOffer);
 

@@ -125,7 +125,7 @@ const HeroSection = () => {
                                 value={keyword}
                                 onChange={(e) => setKeyword(e.target.value)}
                                 placeholder="Job title, tech skill (e.g. React, Node), or company..."
-                                className='w-full bg-transparent! border-none! text-sm text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-400 focus:outline-none'
+                                className='w-full !bg-transparent !border-none text-sm text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-400 focus:outline-none'
                             />
                         </div>
 
@@ -138,7 +138,7 @@ const HeroSection = () => {
                                 value={location}
                                 onChange={(e) => setLocation(e.target.value)}
                                 aria-label="Select city or location"
-                                className='w-full bg-transparent! border-none! text-sm font-medium text-gray-700 dark:text-slate-200 focus:outline-none cursor-pointer'
+                                className='w-full !bg-transparent !border-none text-sm font-medium text-gray-700 dark:text-slate-200 focus:outline-none cursor-pointer'
                             >
                                 <option value="">All Locations</option>
                                 {cityOptions.map((city) => (

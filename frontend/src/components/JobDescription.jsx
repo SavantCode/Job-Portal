@@ -21,12 +21,16 @@ const JobDescription = () => {
     const { user } = useSelector(store => store.auth);
     const navigate = useNavigate();
 
-    const userApplication = singleJob?.applications?.find(
-        app => (app.applicant?._id || app.applicant) === user?._id
-    );
-    const isInitiallyApplied = Boolean(userApplication);
+    const params = useParams();
+    const jobId = params.id;
+    const dispatch = useDispatch();
 
-    const [isApplied, setIsApplied] = useState(isInitiallyApplied);
+    const isMatchingJob = singleJob?._id === jobId;
+    const userApplication = isMatchingJob
+        ? singleJob?.applications?.find(app => (app.applicant?._id || app.applicant) === user?._id)
+        : null;
+
+    const [isApplied, setIsApplied] = useState(Boolean(userApplication));
     const [loading, setLoading] = useState(false);
     const [withdrawing, setWithdrawing] = useState(false);
 
@@ -47,11 +51,13 @@ const JobDescription = () => {
     const [interviewQuestions, setInterviewQuestions] = useState([]);
     const [loadingInterview, setLoadingInterview] = useState(false);
 
-    const params = useParams();
-    const jobId = params.id;
-    const dispatch = useDispatch();
-
     useEffect(() => {
+        // Reset per-job transient state when navigating between job IDs
+        setAtsData(null);
+        setResumeBullets([]);
+        setInterviewQuestions([]);
+        setCoverNote("");
+
         const fetchSingleJob = async () => {
             try {
                 const res = await axios.get(`${JOB_API_END_POINT}/get/${jobId}`, { withCredentials: true });

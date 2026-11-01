@@ -5,6 +5,16 @@
  * without any modal scrollbars, clipped headers, or UI overlays.
  */
 
+const escapeHtml = (value) => {
+    if (value === null || value === undefined) return "";
+    return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+};
+
 export const printA4Letterhead = ({
     type = "offer", // "offer" | "joining"
     appId = "DRAFT",
@@ -25,12 +35,21 @@ export const printA4Letterhead = ({
     const docBadge = isJoining
         ? "OFFICIAL APPOINTMENT & JOINING LETTER"
         : "OFFICIAL EMPLOYMENT OFFER LETTER";
-    const refCode = `JP-${String(appId).slice(-6).toUpperCase()}`;
-    const safeTitle = `${companyName.replace(/\s+/g, "_")}_${isJoining ? "Joining_Letter" : "Offer_Letter"}_${candidateName.replace(/\s+/g, "_")}`;
+    const refCode = escapeHtml(`JP-${String(appId).slice(-6).toUpperCase()}`);
+    const safeTitle = escapeHtml(`${companyName.replace(/\s+/g, "_")}_${isJoining ? "Joining_Letter" : "Offer_Letter"}_${candidateName.replace(/\s+/g, "_")}`);
+
+    const safeCompanyName = escapeHtml(companyName);
+    const safeCompanyLocation = escapeHtml(companyLocation);
+    const safeCandidateName = escapeHtml(candidateName);
+    const safeCandidateEmail = escapeHtml(candidateEmail);
+    const safeCandidatePhone = escapeHtml(candidatePhone);
+    const safeCandidateSig = escapeHtml(candidateSignature || candidateName);
+    const safeJobTitle = escapeHtml(jobTitle);
+    const safeDateStr = escapeHtml(dateStr);
 
     const logoHtml = companyLogo
-        ? `<img src="${companyLogo}" alt="${companyName}" style="width:56px;height:56px;object-fit:contain;border-radius:12px;border:1px solid #e9d5ff;background:#faf5ff;padding:4px;" />`
-        : `<div style="width:56px;height:56px;border-radius:12px;background:#f3e8ff;color:#6A38C2;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:22px;border:1px solid #d8b4fe;">${(companyName || "C").charAt(0).toUpperCase()}</div>`;
+        ? `<img src="${escapeHtml(companyLogo)}" alt="${safeCompanyName}" style="width:56px;height:56px;object-fit:contain;border-radius:12px;border:1px solid #e9d5ff;background:#faf5ff;padding:4px;" />`
+        : `<div style="width:56px;height:56px;border-radius:12px;background:#f3e8ff;color:#6A38C2;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:22px;border:1px solid #d8b4fe;">${escapeHtml((companyName || "C").charAt(0).toUpperCase())}</div>`;
 
     const termsTableHtml = isJoining
         ? `
@@ -38,15 +57,15 @@ export const printA4Letterhead = ({
             <div class="terms-header">ONBOARDING & JOINING SCHEDULE</div>
             <table class="terms-table">
                 <tr>
-                    <td><span class="label">Official Joining Date:</span> <strong>${joiningDetails?.joiningDate || "TBD"}</strong></td>
-                    <td><span class="label">Reporting Time:</span> <strong>${joiningDetails?.reportingTime || "10:00 AM"}</strong></td>
+                    <td><span class="label">Official Joining Date:</span> <strong>${escapeHtml(joiningDetails?.joiningDate || "TBD")}</strong></td>
+                    <td><span class="label">Reporting Time:</span> <strong>${escapeHtml(joiningDetails?.reportingTime || "10:00 AM")}</strong></td>
                 </tr>
                 <tr>
-                    <td><span class="label">Reporting Manager:</span> <strong>${joiningDetails?.reportingManager || "Engineering Manager"}</strong></td>
-                    <td><span class="label">Work Mode:</span> <strong>${joiningDetails?.workMode || "Hybrid"}</strong></td>
+                    <td><span class="label">Reporting Manager:</span> <strong>${escapeHtml(joiningDetails?.reportingManager || "Engineering Manager")}</strong></td>
+                    <td><span class="label">Work Mode:</span> <strong>${escapeHtml(joiningDetails?.workMode || "Hybrid")}</strong></td>
                 </tr>
                 <tr>
-                    <td colspan="2"><span class="label">Mandatory Documents:</span> <strong>${joiningDetails?.documentsRequired || "Government ID, PAN, Educational & Experience Certificates"}</strong></td>
+                    <td colspan="2"><span class="label">Mandatory Documents:</span> <strong>${escapeHtml(joiningDetails?.documentsRequired || "Government ID, PAN, Educational & Experience Certificates")}</strong></td>
                 </tr>
             </table>
         </div>`
@@ -55,15 +74,15 @@ export const printA4Letterhead = ({
             <div class="terms-header">COMPENSATION & EMPLOYMENT TERMS</div>
             <table class="terms-table">
                 <tr>
-                    <td><span class="label">Annual Compensation (CTC):</span> <strong>${offerDetails?.ctc || "As per discussion"}</strong></td>
-                    <td><span class="label">Proposed Start Date:</span> <strong>${offerDetails?.joiningDate || "TBD"}</strong></td>
+                    <td><span class="label">Annual Compensation (CTC):</span> <strong>${escapeHtml(offerDetails?.ctc || "As per discussion")}</strong></td>
+                    <td><span class="label">Proposed Start Date:</span> <strong>${escapeHtml(offerDetails?.joiningDate || "TBD")}</strong></td>
                 </tr>
                 <tr>
-                    <td><span class="label">Work Location:</span> <strong>${offerDetails?.location || companyLocation}</strong></td>
-                    <td><span class="label">Probation Period:</span> <strong>${offerDetails?.probationMonths || 3} Months</strong></td>
+                    <td><span class="label">Work Location:</span> <strong>${escapeHtml(offerDetails?.location || companyLocation)}</strong></td>
+                    <td><span class="label">Probation Period:</span> <strong>${escapeHtml(offerDetails?.probationMonths || 3)} Months</strong></td>
                 </tr>
                 <tr>
-                    <td colspan="2"><span class="label">Benefits & Perks:</span> <strong>${offerDetails?.benefits || "Comprehensive Health Insurance, Standard Corporate Benefits"}</strong></td>
+                    <td colspan="2"><span class="label">Benefits & Perks:</span> <strong>${escapeHtml(offerDetails?.benefits || "Comprehensive Health Insurance, Standard Corporate Benefits")}</strong></td>
                 </tr>
             </table>
         </div>`;
@@ -231,35 +250,35 @@ export const printA4Letterhead = ({
             <div class="brand">
                 ${logoHtml}
                 <div>
-                    <h1 class="company-name">${companyName}</h1>
-                    <p class="company-sub">${companyLocation} • Official HR Executive Document</p>
+                    <h1 class="company-name">${safeCompanyName}</h1>
+                    <p class="company-sub">${safeCompanyLocation} • Official HR Executive Document</p>
                 </div>
             </div>
             <div class="doc-meta">
                 <div class="doc-badge">${docBadge}</div>
                 <div><strong>Ref ID:</strong> ${refCode}</div>
-                <div><strong>Date:</strong> ${dateStr}</div>
+                <div><strong>Date:</strong> ${safeDateStr}</div>
             </div>
         </div>
 
         <div class="recipient-box">
-            <p style="font-size:14px;font-weight:700;color:#111827;">To: ${candidateName}</p>
-            ${candidateEmail ? `<p><strong>Email:</strong> ${candidateEmail}</p>` : ""}
-            ${candidatePhone ? `<p><strong>Phone:</strong> ${candidatePhone}</p>` : ""}
-            <p><strong>Position:</strong> ${jobTitle}</p>
+            <p style="font-size:14px;font-weight:700;color:#111827;">To: ${safeCandidateName}</p>
+            ${safeCandidateEmail ? `<p><strong>Email:</strong> ${safeCandidateEmail}</p>` : ""}
+            ${safeCandidatePhone ? `<p><strong>Phone:</strong> ${safeCandidatePhone}</p>` : ""}
+            <p><strong>Position:</strong> ${safeJobTitle}</p>
         </div>
 
-        <div class="letter-body">${(letterBody || "").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
+        <div class="letter-body">${escapeHtml(letterBody || "")}</div>
 
         ${termsTableHtml}
 
         <div class="signatures">
             <div>
-                <div class="verified-stamp">✓ Digitally Verified by ${companyName} HR</div>
+                <div class="verified-stamp">✓ Digitally Verified by ${safeCompanyName} HR</div>
                 <div style="font-size:11px;color:#6b7280;">Authorized Signatory • Talent Acquisition</div>
             </div>
             <div style="text-align:right;">
-                <div class="sig-script">${candidateSignature || candidateName}</div>
+                <div class="sig-script">${safeCandidateSig}</div>
                 <div class="sig-line">Candidate Digital Signature</div>
             </div>
         </div>
@@ -292,9 +311,9 @@ export const printCandidateCV = ({
     bio = "",
     skills = []
 }) => {
-    const safeTitle = `${fullname.replace(/\s+/g, "_")}_Curriculum_Vitae`;
+    const safeTitle = escapeHtml(`${fullname.replace(/\s+/g, "_")}_Curriculum_Vitae`);
     const skillsBadges = (skills.length > 0 ? skills : ["Full Stack Development", "Problem Solving", "Agile Delivery"])
-        .map(s => `<span class="skill-pill">${s}</span>`)
+        .map(s => `<span class="skill-pill">${escapeHtml(s)}</span>`)
         .join("");
 
     const htmlContent = `<!DOCTYPE html>
@@ -372,19 +391,19 @@ export const printCandidateCV = ({
 <body>
     <div class="cv-header">
         <div>
-            <h1 class="name">${fullname}</h1>
+            <h1 class="name">${escapeHtml(fullname)}</h1>
             <div class="subtitle">Verified Candidate Profile & Curriculum Vitae</div>
         </div>
         <div style="text-align:right;font-size:12px;color:#4b5563;">
-            <div><strong>Email:</strong> ${email}</div>
-            <div><strong>Phone:</strong> ${phoneNumber}</div>
+            <div><strong>Email:</strong> ${escapeHtml(email)}</div>
+            <div><strong>Phone:</strong> ${escapeHtml(phoneNumber)}</div>
         </div>
     </div>
 
     <div class="section">
         <div class="section-title">Professional Summary</div>
         <p style="margin:0;color:#1f2937;">
-            ${bio || "Results-driven software professional experienced in building modern, scalable web applications and collaborating across agile engineering teams."}
+            ${escapeHtml(bio || "Results-driven software professional experienced in building modern, scalable web applications and collaborating across agile engineering teams.")}
         </p>
     </div>
 
@@ -427,35 +446,35 @@ export const printMockInterviewReport = ({
     evaluations = {},
     userAnswers = {}
 }) => {
-    const safeTitle = `${candidateName.replace(/\s+/g, "_")}_Mock_Interview_Report_${jobTitle.replace(/\s+/g, "_")}`;
-    const dateStr = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
+    const safeTitle = escapeHtml(`${candidateName.replace(/\s+/g, "_")}_Mock_Interview_Report_${jobTitle.replace(/\s+/g, "_")}`);
+    const dateStr = escapeHtml(new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }));
 
     const qaRowsHtml = questions
         .map((q, idx) => {
             const ev = evaluations[idx];
             const ans = userAnswers[idx] || "Not answered";
-            const scoreStr = ev ? `${ev.overallScore} / 10 (${ev.verdictBadge})` : "Not Graded";
+            const scoreStr = ev ? `${escapeHtml(ev.overallScore)} / 10 (${escapeHtml(ev.verdictBadge)})` : "Not Graded";
             const strengthsHtml = ev?.strengths?.length
-                ? `<p style="margin:4px 0;color:#065f46;font-size:11.5px;"><strong>✓ Strengths:</strong> ${ev.strengths.join(" • ")}</p>`
+                ? `<p style="margin:4px 0;color:#065f46;font-size:11.5px;"><strong>✓ Strengths:</strong> ${ev.strengths.map(escapeHtml).join(" • ")}</p>`
                 : "";
             const improvementsHtml = ev?.improvements?.length
-                ? `<p style="margin:4px 0;color:#92400e;font-size:11.5px;"><strong>⚠ Improvements:</strong> ${ev.improvements.join(" • ")}</p>`
+                ? `<p style="margin:4px 0;color:#92400e;font-size:11.5px;"><strong>⚠ Improvements:</strong> ${ev.improvements.map(escapeHtml).join(" • ")}</p>`
                 : "";
 
             return `
             <div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;margin-bottom:14px;page-break-inside:avoid;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                    <span style="font-weight:800;font-size:12px;color:#6A38C2;text-transform:uppercase;">Q${idx + 1} • ${q.type || "Technical"}</span>
+                    <span style="font-weight:800;font-size:12px;color:#6A38C2;text-transform:uppercase;">Q${idx + 1} • ${escapeHtml(q.type || "Technical")}</span>
                     <span style="font-weight:700;font-size:12px;color:#111827;background:#f3e8ff;padding:2px 8px;border-radius:6px;">${scoreStr}</span>
                 </div>
-                <p style="margin:0 0 8px 0;font-weight:700;color:#111827;font-size:13px;">${q.question}</p>
+                <p style="margin:0 0 8px 0;font-weight:700;color:#111827;font-size:13px;">${escapeHtml(q.question)}</p>
                 <p style="margin:0 0 8px 0;color:#374151;font-size:12px;background:#f9fafb;padding:8px 10px;border-radius:6px;border:1px solid #f3f4f6;">
-                    <strong>Your Answer:</strong> ${String(ans).replace(/</g, "&lt;").replace(/>/g, "&gt;")}
+                    <strong>Your Answer:</strong> ${escapeHtml(ans)}
                 </p>
                 ${strengthsHtml}
                 ${improvementsHtml}
                 <p style="margin:6px 0 0 0;color:#1e3a8a;font-size:11.5px;">
-                    <strong>💡 Ideal Reference Answer:</strong> ${ev?.idealAnswer || q.answer}
+                    <strong>💡 Ideal Reference Answer:</strong> ${escapeHtml(ev?.idealAnswer || q.answer)}
                 </p>
             </div>`;
         })
@@ -478,7 +497,7 @@ export const printMockInterviewReport = ({
     <div class="header">
         <div>
             <h1 style="margin:0;font-size:20px;font-weight:800;color:#111827;">AI Mock Interview Readiness Report</h1>
-            <p style="margin:3px 0 0 0;font-size:12px;color:#6b7280;">Candidate: <strong>${candidateName}</strong> • Target Role: <strong>${jobTitle} (${companyName})</strong></p>
+            <p style="margin:3px 0 0 0;font-size:12px;color:#6b7280;">Candidate: <strong>${escapeHtml(candidateName)}</strong> • Target Role: <strong>${escapeHtml(jobTitle)} (${escapeHtml(companyName)})</strong></p>
         </div>
         <div style="text-align:right;font-size:11px;color:#6b7280;">
             <div><strong>Date:</strong> ${dateStr}</div>
@@ -489,11 +508,11 @@ export const printMockInterviewReport = ({
     <div class="summary-banner">
         <div>
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#6A38C2;">Overall Hiring Readiness Verdict</div>
-            <div style="font-size:16px;font-weight:800;color:#111827;margin-top:2px;">${readinessVerdict}</div>
+            <div style="font-size:16px;font-weight:800;color:#111827;margin-top:2px;">${escapeHtml(readinessVerdict)}</div>
         </div>
         <div style="text-align:right;">
             <div style="font-size:11px;color:#6b7280;">Average Rubric Score</div>
-            <div style="font-size:22px;font-weight:800;color:#6A38C2;">${averageScore} / 10</div>
+            <div style="font-size:22px;font-weight:800;color:#6A38C2;">${escapeHtml(averageScore)} / 10</div>
         </div>
     </div>
 

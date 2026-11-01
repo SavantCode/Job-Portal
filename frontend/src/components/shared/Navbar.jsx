@@ -2,14 +2,16 @@ import React, { useEffect, useState } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Button } from '../ui/button'
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
-import { LogOut, User2, ChevronDown, Bell, CheckCircle2, XCircle, Sparkles, Calendar, Award, ClipboardList, Sun, Moon } from 'lucide-react'
+import { LogOut, User2, ChevronDown, Bell, CheckCircle2, XCircle, Sparkles, Calendar, Award, ClipboardList, Sun, Moon, Menu, X } from 'lucide-react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useDispatch, useSelector } from 'react-redux'
 import axios from 'axios'
 import { APPLICATION_API_END_POINT, NOTIFICATION_API_END_POINT, USER_API_END_POINT } from '@/utils/constant'
 import { setUser } from '@/redux/authSlice'
-import { setAllAppliedJobs } from '@/redux/jobSlice'
-import { setNotifications, markAllReadInStore } from '@/redux/notificationSlice'
+import { setAllAppliedJobs, setAllAdminJobs, setSingleJob, resetJobFilters } from '@/redux/jobSlice'
+import { setCompanies, setSingleCompany, setSearchCompanyByText } from '@/redux/companySlice'
+import { setAllApplicants } from '@/redux/applicationSlice'
+import { setNotifications, markAllReadInStore, clearNotificationsInStore } from '@/redux/notificationSlice'
 import { toast } from 'sonner'
 
 const Navbar = () => {
@@ -18,6 +20,7 @@ const Navbar = () => {
     const dispatch = useDispatch();
     const navigate = useNavigate();
     const location = useLocation();
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
     // Persistent Dark Mode State
     const [isDark, setIsDark] = useState(() => {
@@ -39,6 +42,10 @@ const Navbar = () => {
             localStorage.setItem("theme", "light");
         }
     }, [isDark]);
+
+    useEffect(() => {
+        setMobileMenuOpen(false);
+    }, [location.pathname]);
 
     const toggleDarkMode = () => {
         setIsDark(prev => !prev);
@@ -85,6 +92,15 @@ const Navbar = () => {
             const res = await axios.get(`${USER_API_END_POINT}/logout`, { withCredentials: true });
             if (res.data.success) {
                 dispatch(setUser(null));
+                dispatch(setAllAppliedJobs([]));
+                dispatch(setAllAdminJobs([]));
+                dispatch(setSingleJob(null));
+                dispatch(resetJobFilters());
+                dispatch(setCompanies([]));
+                dispatch(setSingleCompany(null));
+                dispatch(setSearchCompanyByText(""));
+                dispatch(setAllApplicants(null));
+                dispatch(clearNotificationsInStore());
                 navigate("/");
                 toast.success(res.data.message);
             }
@@ -97,11 +113,19 @@ const Navbar = () => {
     const isActiveLink = (path) => location.pathname === path;
 
     return (
-        <header className='sticky top-0 z-50 bg-white/85 dark:bg-slate-900/85 backdrop-blur-md border-b border-gray-100 dark:border-slate-800 shadow-2xs transition-colors'>
+        <header className='sticky top-0 z-50 bg-white/85 dark:bg-slate-900/85 backdrop-blur-md border-b border-gray-100 dark:border-slate-800 shadow-sm transition-colors'>
             <div className='flex items-center justify-between mx-auto max-w-7xl h-16 px-4 sm:px-6 lg:px-8'>
-                {/* Logo */}
-                <div>
-                    <Link to="/" className='flex items-center gap-1.5 focus:outline-hidden'>
+                {/* Logo & Mobile Menu Button */}
+                <div className='flex items-center gap-2.5'>
+                    <button
+                        type="button"
+                        onClick={() => setMobileMenuOpen(prev => !prev)}
+                        className='md:hidden p-2 rounded-xl text-gray-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800 cursor-pointer'
+                        aria-label="Toggle navigation menu"
+                    >
+                        {mobileMenuOpen ? <X className='w-5 h-5' /> : <Menu className='w-5 h-5' />}
+                    </button>
+                    <Link to="/" className='flex items-center gap-1.5 focus:outline-none'>
                         <h1 className='text-2xl font-extrabold tracking-tight text-gray-900 dark:text-white'>
                             Job<span className='text-[#F83002]'>Portal</span>
                         </h1>
@@ -150,7 +174,7 @@ const Navbar = () => {
                                             >
                                                 <span>Notifications</span>
                                                 {unreadCount > 0 && (
-                                                    <span className='px-1.5 py-0.2 rounded-full bg-[#F83002] text-white text-[10px] font-bold'>
+                                                    <span className='px-1.5 py-0.5 rounded-full bg-[#F83002] text-white text-[10px] font-bold'>
                                                         {unreadCount}
                                                     </span>
                                                 )}
@@ -220,7 +244,7 @@ const Navbar = () => {
                                                 >
                                                     <span>Notifications</span>
                                                     {unreadCount > 0 && (
-                                                        <span className='px-1.5 py-0.2 rounded-full bg-[#F83002] text-white text-[10px] font-bold'>
+                                                        <span className='px-1.5 py-0.5 rounded-full bg-[#F83002] text-white text-[10px] font-bold'>
                                                             {unreadCount}
                                                         </span>
                                                     )}
@@ -237,7 +261,7 @@ const Navbar = () => {
                     <button
                         type="button"
                         onClick={toggleDarkMode}
-                        className="h-9 px-3 rounded-full border border-gray-200 dark:border-slate-700 bg-gray-50/80 dark:bg-slate-800/90 hover:bg-gray-100 dark:hover:bg-slate-700/80 text-gray-700 dark:text-slate-200 flex items-center gap-1.5 text-xs font-medium transition-all cursor-pointer shadow-2xs"
+                        className="h-9 px-3 rounded-full border border-gray-200 dark:border-slate-700 bg-gray-50/80 dark:bg-slate-800/90 hover:bg-gray-100 dark:hover:bg-slate-700/80 text-gray-700 dark:text-slate-200 flex items-center gap-1.5 text-xs font-medium transition-all cursor-pointer shadow-sm"
                         aria-label="Toggle color theme"
                         title={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
                     >
@@ -331,7 +355,7 @@ const Navbar = () => {
                                     </Button>
                                 </Link>
                                 <Link to="/signup">
-                                    <Button className="rounded-xl bg-[#6A38C2] hover:bg-[#5b30a6] text-white font-medium shadow-xs transition-all h-9 px-4">
+                                    <Button className="rounded-xl bg-[#6A38C2] hover:bg-[#5b30a6] text-white font-medium shadow-sm transition-all h-9 px-4">
                                         Signup
                                     </Button>
                                 </Link>
@@ -407,6 +431,112 @@ const Navbar = () => {
                     }
                 </div>
             </div>
+
+            {/* Responsive Mobile Navigation Drawer */}
+            {mobileMenuOpen && (
+                <div className='md:hidden bg-white dark:bg-slate-900 border-b border-gray-100 dark:border-slate-800 px-4 pt-2 pb-4 space-y-1'>
+                    {user && user.role === 'recruiter' ? (
+                        <>
+                            <Link
+                                to="/admin/companies"
+                                className={`block px-3.5 py-2.5 rounded-xl text-sm font-medium ${
+                                    isActiveLink('/admin/companies')
+                                        ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                }`}
+                            >
+                                Companies
+                            </Link>
+                            <Link
+                                to="/admin/jobs"
+                                className={`block px-3.5 py-2.5 rounded-xl text-sm font-medium ${
+                                    isActiveLink('/admin/jobs')
+                                        ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                }`}
+                            >
+                                Jobs & Analytics
+                            </Link>
+                            <Link
+                                to="/notifications"
+                                className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium ${
+                                    isActiveLink('/notifications')
+                                        ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                }`}
+                            >
+                                <span>Notifications</span>
+                                {unreadCount > 0 && (
+                                    <span className='px-2 py-0.5 rounded-full bg-[#F83002] text-white text-[10px] font-bold'>
+                                        {unreadCount}
+                                    </span>
+                                )}
+                            </Link>
+                        </>
+                    ) : (
+                        <>
+                            <Link
+                                to="/"
+                                className={`block px-3.5 py-2.5 rounded-xl text-sm font-medium ${
+                                    isActiveLink('/')
+                                        ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                }`}
+                            >
+                                Home
+                            </Link>
+                            <Link
+                                to="/jobs"
+                                className={`block px-3.5 py-2.5 rounded-xl text-sm font-medium ${
+                                    isActiveLink('/jobs')
+                                        ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                }`}
+                            >
+                                Jobs
+                            </Link>
+                            <Link
+                                to="/browse"
+                                className={`block px-3.5 py-2.5 rounded-xl text-sm font-medium ${
+                                    isActiveLink('/browse')
+                                        ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                }`}
+                            >
+                                Browse
+                            </Link>
+                            <Link
+                                to="/ai-cover-letter"
+                                className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-sm font-medium ${
+                                    isActiveLink('/ai-cover-letter')
+                                        ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                }`}
+                            >
+                                <Sparkles className='w-4 h-4 text-[#6A38C2] dark:text-purple-400' />
+                                <span>AI Cover Letter</span>
+                            </Link>
+                            {user && user.role === 'student' && (
+                                <Link
+                                    to="/notifications"
+                                    className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium ${
+                                        isActiveLink('/notifications')
+                                            ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                            : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                    }`}
+                                >
+                                    <span>Notifications</span>
+                                    {unreadCount > 0 && (
+                                        <span className='px-2 py-0.5 rounded-full bg-[#F83002] text-white text-[10px] font-bold'>
+                                            {unreadCount}
+                                        </span>
+                                    )}
+                                </Link>
+                            )}
+                        </>
+                    )}
+                </div>
+            )}
         </header>
     )
 }

@@ -10,8 +10,20 @@ import { AI_API_END_POINT, JOB_API_END_POINT } from '@/utils/constant'
 import { toast } from 'sonner'
 import { useNavigate } from 'react-router-dom'
 import { Loader2, Briefcase, MapPin, IndianRupee, Clock, Users, Building, FileText, CheckCircle2, Sparkles } from 'lucide-react'
+import useGetAllCompanies from '@/hooks/useGetAllCompanies'
 
 const LOCAL_STORAGE_KEY = "postJobFormState";
+
+const DEFAULT_SALARIES = ["3-6", "6-10", "10-15", "15-25", "25+"];
+const DEFAULT_LOCATIONS = ["Bengaluru", "Mumbai", "Hyderabad", "Pune", "Delhi NCR", "Chennai", "Noida", "Remote"];
+const DEFAULT_EXPERIENCES = [
+    { value: "0", label: "Fresher (0 Years)" },
+    { value: "1", label: "1 Year" },
+    { value: "2", label: "2 Years" },
+    { value: "3", label: "3 Years" },
+    { value: "4", label: "4 Years" },
+    { value: "5", label: "5+ Years" }
+];
 
 /**
  * PostJob Component (Recruiter)
@@ -19,6 +31,7 @@ const LOCAL_STORAGE_KEY = "postJobFormState";
  * - Automatically persists draft state in localStorage
  */
 const PostJob = () => {
+    useGetAllCompanies();
     const [input, setInput] = useState(() => {
         const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (savedData) {
@@ -45,7 +58,7 @@ const PostJob = () => {
     const [generatingAI, setGeneratingAI] = useState(false);
     const navigate = useNavigate();
 
-    const { companies } = useSelector(store => store.company);
+    const { companies = [] } = useSelector(store => store.company);
 
     useEffect(() => {
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(input));
@@ -92,8 +105,8 @@ const PostJob = () => {
                     ...prev,
                     description: res.data.description || prev.description,
                     requirements: res.data.requirements || prev.requirements,
-                    salary: prev.salary || res.data.suggestedSalary || "10-15",
-                    experience: prev.experience !== "" ? prev.experience : (res.data.suggestedExperience || "1"),
+                    salary: prev.salary || String(res.data.suggestedSalary || "10-15"),
+                    experience: prev.experience !== "" ? String(prev.experience) : String(res.data.suggestedExperience ?? "1"),
                     location: prev.location || "Bengaluru"
                 }));
                 toast.success("✨ Job Description & Tech Stack auto-generated with AI!");
@@ -125,11 +138,11 @@ const PostJob = () => {
             return;
         }
         if (!input.salary) {
-            toast.error("Please select a Salary package.");
+            toast.error("Please select or enter a Salary package.");
             return;
         }
         if (!input.location) {
-            toast.error("Please select a work Location.");
+            toast.error("Please select or enter a work Location.");
             return;
         }
         if (!input.jobType) {
@@ -170,6 +183,18 @@ const PostJob = () => {
             setLoading(false);
         }
     };
+
+    const salaryOptions = input.salary && !DEFAULT_SALARIES.includes(String(input.salary))
+        ? [...DEFAULT_SALARIES, String(input.salary)]
+        : DEFAULT_SALARIES;
+
+    const locationOptions = input.location && !DEFAULT_LOCATIONS.includes(String(input.location))
+        ? [...DEFAULT_LOCATIONS, String(input.location)]
+        : DEFAULT_LOCATIONS;
+
+    const expOptions = input.experience !== "" && !DEFAULT_EXPERIENCES.some(e => e.value === String(input.experience))
+        ? [...DEFAULT_EXPERIENCES, { value: String(input.experience), label: `${input.experience} Years` }]
+        : DEFAULT_EXPERIENCES;
 
     return (
         <div className='min-h-screen bg-gray-50/40 pb-20'>
@@ -295,17 +320,15 @@ const PostJob = () => {
                             <Label className='text-sm font-semibold text-gray-700 flex items-center gap-2'>
                                 <IndianRupee className='w-4 h-4 text-[#6A38C2]' /> Salary Package (LPA) <span className='text-red-500'>*</span>
                             </Label>
-                            <Select value={input.salary} onValueChange={(value) => handleSelectChange('salary', value)}>
+                            <Select value={String(input.salary)} onValueChange={(value) => handleSelectChange('salary', value)}>
                                 <SelectTrigger className="h-11 rounded-xl border-gray-200 w-full focus:ring-1 focus:ring-[#6A38C2]">
                                     <SelectValue placeholder="Select salary range" />
                                 </SelectTrigger>
                                 <SelectContent className="rounded-xl border-gray-100 shadow-lg">
                                     <SelectGroup>
-                                        <SelectItem value="3-6">3 - 6 LPA</SelectItem>
-                                        <SelectItem value="6-10">6 - 10 LPA</SelectItem>
-                                        <SelectItem value="10-15">10 - 15 LPA</SelectItem>
-                                        <SelectItem value="15-25">15 - 25 LPA</SelectItem>
-                                        <SelectItem value="25+">25+ LPA</SelectItem>
+                                        {salaryOptions.map((sal) => (
+                                            <SelectItem key={sal} value={sal}>{sal} LPA</SelectItem>
+                                        ))}
                                     </SelectGroup>
                                 </SelectContent>
                             </Select>
@@ -316,18 +339,15 @@ const PostJob = () => {
                             <Label className='text-sm font-semibold text-gray-700 flex items-center gap-2'>
                                 <MapPin className='w-4 h-4 text-[#6A38C2]' /> Location <span className='text-red-500'>*</span>
                             </Label>
-                            <Select value={input.location} onValueChange={(value) => handleSelectChange('location', value)}>
+                            <Select value={String(input.location)} onValueChange={(value) => handleSelectChange('location', value)}>
                                 <SelectTrigger className="h-11 rounded-xl border-gray-200 w-full focus:ring-1 focus:ring-[#6A38C2]">
                                     <SelectValue placeholder="Select work location" />
                                 </SelectTrigger>
                                 <SelectContent className="rounded-xl border-gray-100 shadow-lg">
                                     <SelectGroup>
-                                        <SelectItem value="Bengaluru">Bengaluru</SelectItem>
-                                        <SelectItem value="Mumbai">Mumbai</SelectItem>
-                                        <SelectItem value="Hyderabad">Hyderabad</SelectItem>
-                                        <SelectItem value="Pune">Pune</SelectItem>
-                                        <SelectItem value="Delhi NCR">Delhi NCR</SelectItem>
-                                        <SelectItem value="Remote">Remote</SelectItem>
+                                        {locationOptions.map((loc) => (
+                                            <SelectItem key={loc} value={loc}>{loc}</SelectItem>
+                                        ))}
                                     </SelectGroup>
                                 </SelectContent>
                             </Select>
@@ -364,11 +384,9 @@ const PostJob = () => {
                                 </SelectTrigger>
                                 <SelectContent className="rounded-xl border-gray-100 shadow-lg">
                                     <SelectGroup>
-                                        <SelectItem value="0">Fresher (0 Years)</SelectItem>
-                                        <SelectItem value="1">1 Year</SelectItem>
-                                        <SelectItem value="2">2 Years</SelectItem>
-                                        <SelectItem value="3">3 Years</SelectItem>
-                                        <SelectItem value="5">5+ Years</SelectItem>
+                                        {expOptions.map((exp) => (
+                                            <SelectItem key={exp.value} value={exp.value}>{exp.label}</SelectItem>
+                                        ))}
                                     </SelectGroup>
                                 </SelectContent>
                             </Select>
