@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { User } from "../models/user.model.js";
 
 const isAuthenticated = async (req, res, next) => {
     try {
@@ -17,6 +18,7 @@ const isAuthenticated = async (req, res, next) => {
             });
         }
         req.id = decode.userId;
+        req.role = decode.role;
         next();
     } catch (error) {
         console.log(error);
@@ -26,4 +28,28 @@ const isAuthenticated = async (req, res, next) => {
         });
     }
 };
+
+export const isRecruiter = async (req, res, next) => {
+    try {
+        if (req.role === "recruiter") {
+            return next();
+        }
+        const user = await User.findById(req.id).select("role");
+        if (!user || user.role !== "recruiter") {
+            return res.status(403).json({
+                message: "Access denied. Recruiter privileges required.",
+                success: false
+            });
+        }
+        req.role = user.role;
+        next();
+    } catch (error) {
+        console.log(error);
+        return res.status(500).json({
+            message: "Authorization check failed.",
+            success: false
+        });
+    }
+};
+
 export default isAuthenticated;

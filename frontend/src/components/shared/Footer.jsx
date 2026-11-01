@@ -87,7 +87,7 @@ const Footer = () => {
                                     value={newsletterEmail}
                                     onChange={(e) => setNewsletterEmail(e.target.value)}
                                     placeholder='Enter your email'
-                                    className='w-full bg-gray-800 text-sm rounded-lg pl-9 pr-3 py-2 text-white border border-gray-700 focus:outline-hidden focus:border-[#6A38C2] transition-colors'
+                                    className='w-full bg-gray-800 text-sm rounded-lg pl-9 pr-3 py-2 text-white border border-gray-700 focus:outline-none focus:border-[#6A38C2] transition-colors'
                                 />
                             </div>
                             <button type='submit' className='bg-[#6A38C2] hover:bg-[#5b30a6] text-white p-2 rounded-lg transition-colors shrink-0 cursor-pointer'>
@@ -121,7 +121,7 @@ const Footer = () => {
                             <a href="https://linkedin.com" target="_blank" rel="noreferrer" className='w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center hover:bg-[#6A38C2] hover:text-white transition-colors' aria-label="LinkedIn">
                                 <Linkedin className='w-4 h-4' />
                             </a>
-                            <a href="https://twitter.com" target="_blank" rel="noreferrer" className='w-4 h-4' aria-label="Twitter">
+                            <a href="https://twitter.com" target="_blank" rel="noreferrer" className='w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center hover:bg-[#6A38C2] hover:text-white transition-colors' aria-label="Twitter">
                                 <Twitter className='w-4 h-4' />
                             </a>
                             <a href="https://facebook.com" target="_blank" rel="noreferrer" className='w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center hover:bg-[#6A38C2] hover:text-white transition-colors' aria-label="Facebook">
