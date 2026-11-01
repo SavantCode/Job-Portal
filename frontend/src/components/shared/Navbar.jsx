@@ -1,8 +1,8 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Button } from '../ui/button'
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
-import { LogOut, User2, ChevronDown, Bell, CheckCircle2, XCircle, Clock, Sparkles, Calendar, Award, ClipboardList } from 'lucide-react'
+import { LogOut, User2, ChevronDown, Bell, CheckCircle2, XCircle, Sparkles, Calendar, Award, ClipboardList, Sun, Moon } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useDispatch, useSelector } from 'react-redux'
 import axios from 'axios'
@@ -17,6 +17,31 @@ const Navbar = () => {
     const { notifications = [] } = useSelector(store => store.notification);
     const dispatch = useDispatch();
     const navigate = useNavigate();
+
+    // Dark Mode State
+    const [isDark, setIsDark] = useState(() => {
+        if (typeof window !== "undefined") {
+            return (
+                document.documentElement.classList.contains("dark") ||
+                localStorage.getItem("theme") === "dark"
+            );
+        }
+        return false;
+    });
+
+    useEffect(() => {
+        if (isDark) {
+            document.documentElement.classList.add("dark");
+            localStorage.setItem("theme", "dark");
+        } else {
+            document.documentElement.classList.remove("dark");
+            localStorage.setItem("theme", "light");
+        }
+    }, [isDark]);
+
+    const toggleDarkMode = () => {
+        setIsDark(prev => !prev);
+    };
 
     // Fetch latest applied jobs & persistent notifications for student
     useEffect(() => {
@@ -67,7 +92,7 @@ const Navbar = () => {
     };
 
     return (
-        <header className='sticky top-0 z-50 bg-white/85 backdrop-blur-md border-b border-gray-100 shadow-xs'>
+        <header className='sticky top-0 z-50 bg-white/85 backdrop-blur-md border-b border-gray-100 shadow-xs transition-colors'>
             <div className='flex items-center justify-between mx-auto max-w-7xl h-16 px-4 sm:px-6 lg:px-8'>
                 {/* Logo */}
                 <div>
@@ -79,9 +104,9 @@ const Navbar = () => {
                 </div>
 
                 {/* Nav Links & Actions */}
-                <div className='flex items-center gap-6'>
+                <div className='flex items-center gap-4 sm:gap-6'>
                     <nav>
-                        <ul className='flex font-medium items-center gap-6 text-gray-600 text-sm sm:text-base'>
+                        <ul className='flex font-medium items-center gap-5 sm:gap-6 text-gray-600 text-sm sm:text-base'>
                             {
                                 user && user.role === 'recruiter' ? (
                                     <>
@@ -126,6 +151,21 @@ const Navbar = () => {
                             }
                         </ul>
                     </nav>
+
+                    {/* Dark Mode Toggle Button */}
+                    <button
+                        type="button"
+                        onClick={toggleDarkMode}
+                        className="p-2 rounded-full border border-gray-200 hover:bg-purple-50 text-gray-600 hover:text-[#6A38C2] transition-all cursor-pointer"
+                        aria-label="Toggle Dark Mode"
+                        title={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                    >
+                        {isDark ? (
+                            <Sun className="w-4 h-4 text-amber-400" />
+                        ) : (
+                            <Moon className="w-4 h-4" />
+                        )}
+                    </button>
 
                     {/* Job Alerts Notification Bell for Students */}
                     {user && user.role === 'student' && (
