@@ -10,20 +10,21 @@ import { Button } from './ui/button';
 import { Search, X, Briefcase, LayoutGrid, List, ArrowUpDown, Sparkles } from 'lucide-react';
 import { resetJobFilters, setJobFilters } from '@/redux/jobSlice';
 import useGetAllJobs from '@/hooks/useGetAllJobs';
+import { computeJobMatchForUser } from '@/utils/matchmaking';
 
 const Jobs = () => {
     useGetAllJobs();
     const dispatch = useDispatch();
     const { allJobs = [], searchedQuery = "", jobFilters = {} } = useSelector(store => store.job);
+    const { user } = useSelector(store => store.auth);
 
-    const [sortBy, setSortBy] = useState("newest"); // "newest" | "salary_high" | "positions"
+    const [sortBy, setSortBy] = useState("newest"); // "newest" | "best_match" | "salary_high" | "positions"
     const [viewMode, setViewMode] = useState("grid"); // "grid" | "list"
 
     const filterJobs = useMemo(() => {
         const filtered = allJobs.filter((job) => {
             const combinedKeyword = (jobFilters.keyword || searchedQuery || "").trim().toLowerCase();
 
-            // 1. Keyword match (title, description, company name, location, or requirements)
             if (combinedKeyword) {
                 const reqText = Array.isArray(job?.requirements) ? job.requirements.join(" ").toLowerCase() : "";
                 const matchesKeyword =
@@ -35,7 +36,6 @@ const Jobs = () => {
                 if (!matchesKeyword) return false;
             }
 
-            // 2. Dynamic City / Location match (handles Bengaluru/Bangalore synonyms + any city)
             if (jobFilters.location) {
                 const loc = jobFilters.location.toLowerCase().trim();
                 const jobLoc = (job?.location || "").toLowerCase();
@@ -45,7 +45,6 @@ const Jobs = () => {
                 if (!isBangaloreMatch && !jobLoc.includes(loc)) return false;
             }
 
-            // 3. Dynamic Role / Skill match
             if (jobFilters.industry) {
                 const ind = jobFilters.industry.toLowerCase().trim();
                 const titleAndDesc = `${job?.title || ""} ${job?.description || ""} ${(job?.requirements || []).join(" ")}`.toLowerCase();
@@ -54,18 +53,15 @@ const Jobs = () => {
                 if (!regex.test(titleAndDesc) && !titleAndDesc.includes(ind)) return false;
             }
 
-            // 4. Dynamic Job Type match
             if (jobFilters.jobType) {
                 const jt = (job?.jobType || "").toLowerCase().trim();
                 if (jt !== jobFilters.jobType.toLowerCase().trim()) return false;
             }
 
-            // 5. Experience Level match
             if (jobFilters.experience) {
                 if (!matchesExperienceFilter(job?.experienceLevel, jobFilters.experience)) return false;
             }
 
-            // 6. Dynamic Salary Range match
             if (jobFilters.salary) {
                 if (!matchesSalaryFilter(job?.salary, jobFilters.salary)) return false;
             }
@@ -73,8 +69,12 @@ const Jobs = () => {
             return true;
         });
 
-        // Apply Sorting
         return [...filtered].sort((a, b) => {
+            if (sortBy === "best_match" && user) {
+                const scoreA = computeJobMatchForUser(a, user)?.score || 0;
+                const scoreB = computeJobMatchForUser(b, user)?.score || 0;
+                return scoreB - scoreA;
+            }
             if (sortBy === "salary_high") {
                 return getJobSalaryLPA(b.salary).max - getJobSalaryLPA(a.salary).max;
             }
@@ -83,7 +83,7 @@ const Jobs = () => {
             }
             return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
         });
-    }, [allJobs, searchedQuery, jobFilters, sortBy]);
+    }, [allJobs, searchedQuery, jobFilters, sortBy, user]);
 
     const activeFilterEntries = Object.entries(jobFilters).filter(([, val]) => Boolean(val));
 
@@ -98,7 +98,7 @@ const Jobs = () => {
                         <div>
                             <div className='inline-flex items-center gap-1.5 text-xs font-semibold text-[#6A38C2] dark:text-purple-400 mb-1'>
                                 <Sparkles className='w-3.5 h-3.5' />
-                                <span>Verified Career Opportunities</span>
+                                <span>Verified Career Opportunities & Resume Matchmaking</span>
                             </div>
                             <h1 className='text-2xl sm:text-3xl font-extrabold text-gray-900 dark:text-white tracking-tight'>
                                 Explore Open Roles
@@ -138,6 +138,9 @@ const Jobs = () => {
                                         className='h-10 pl-8 pr-3 rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold text-gray-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#6A38C2] cursor-pointer'
                                     >
                                         <option value="newest">Sort: Newest First</option>
+                                        {user && user.role !== "recruiter" && (
+                                            <option value="best_match">Sort: Best Resume Match %</option>
+                                        )}
                                         <option value="salary_high">Sort: Highest Salary</option>
                                         <option value="positions">Sort: Most Openings</option>
                                     </select>
@@ -202,7 +205,7 @@ const Jobs = () => {
                 </div>
             </div>
 
-            {/* Main Content Layout: Sticky Filter Sidebar + Natural Window Scroll Grid */}
+            {/* Main Content Layout: Sticky Filter Sidebar + Breathable 2-Col Card Grid */}
             <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8'>
                 <div className='flex flex-col lg:flex-row items-start gap-7'>
                     {/* Left Sticky Dynamic Filter Sidebar */}
@@ -240,7 +243,7 @@ const Jobs = () => {
                                 className={
                                     viewMode === "list"
                                         ? "flex flex-col gap-4"
-                                        : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
+                                        : "grid grid-cols-1 md:grid-cols-2 gap-6"
                                 }
                             >
                                 {filterJobs.map((job) => (

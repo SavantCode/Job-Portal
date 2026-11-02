@@ -1,28 +1,34 @@
 import express from "express";
+import isAuthenticated from "../middlewares/isAuthenticated.js";
 import {
     generateCoverLetter,
     getAtsMatchScore,
     generateInterviewPrep,
     evaluateInterviewAnswer,
+    generateJobDescription,
+    generateResumeBullets,
     draftRecruiterCommunication,
-    generateJobPostWithAI,
-    generateResumeBullets
+    generateRecruiterStageLetter
 } from "../controllers/ai.controller.js";
-import isAuthenticated from "../middlewares/isAuthenticated.js";
 
 const router = express.Router();
 
-/**
- * Candidate & Recruiter AI Endpoints
- * All routes are protected with isAuthenticated so req.id is populated
- * with the logged-in user's MongoDB ObjectId.
- */
-router.route("/generate-cover-letter/:jobId?").post(isAuthenticated, generateCoverLetter);
+// Cover Letter & Quick Pitch
+router.route("/generate-cover-letter").post(isAuthenticated, generateCoverLetter);
+router.route("/generate-cover-letter/:jobId").post(isAuthenticated, generateCoverLetter);
+
+// ATS Match Score & Resume Bullets
 router.route("/ats-match/:jobId").get(isAuthenticated, getAtsMatchScore);
-router.route("/interview-prep/:jobId").post(isAuthenticated, generateInterviewPrep);
-router.route("/evaluate-interview-answer").post(isAuthenticated, evaluateInterviewAnswer);
-router.route("/draft-hiring-email").post(isAuthenticated, draftRecruiterCommunication);
-router.route("/generate-job-description").post(isAuthenticated, generateJobPostWithAI);
 router.route("/resume-bullets/:jobId").post(isAuthenticated, generateResumeBullets);
+
+// Recruiter AI Job Description & Stage Letter / Email Drafting
+router.route("/generate-job-description").post(isAuthenticated, generateJobDescription);
+router.route("/draft-recruiter-email").post(isAuthenticated, draftRecruiterCommunication);
+router.route("/generate-stage-letter").post(isAuthenticated, generateRecruiterStageLetter);
+
+// AI Mock Interview Simulator (Questions + 10-Point Rubric Grading)
+router.route("/interview-prep/:jobId").post(isAuthenticated, generateInterviewPrep);
+router.route("/evaluate-interview").post(isAuthenticated, evaluateInterviewAnswer);
+router.route("/evaluate-interview-answer").post(isAuthenticated, evaluateInterviewAnswer);
 
 export default router;

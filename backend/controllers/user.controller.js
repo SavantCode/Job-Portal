@@ -3,58 +3,96 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import getDataUri from "../utils/datauri.js";
 import cloudinary from "../utils/cloudinary.js";
+import { parseResumeFile, analyzeResumeText } from "../utils/resumeParser.js";
 
-/**
- * Register a new User (Student or Recruiter)
- * Supports optional profile photo upload via Cloudinary
- */
+const hasValidCloudinaryConfig = () => {
+    const { CLOUD_NAME, API_KEY, API_SECRET } = process.env;
+    return Boolean(
+        CLOUD_NAME &&
+            API_KEY &&
+            API_SECRET &&
+            !CLOUD_NAME.includes("your_") &&
+            !API_KEY.includes("your_")
+    );
+};
+
+const sanitizeUserPayload = (userDoc) => {
+    if (!userDoc) return null;
+    return {
+        _id: userDoc._id,
+        fullname: userDoc.fullname,
+        email: userDoc.email,
+        phoneNumber: userDoc.phoneNumber,
+        role: userDoc.role,
+        profile: userDoc.profile,
+        savedJobs: userDoc.savedJobs || [],
+        createdAt: userDoc.createdAt
+    };
+};
+
 export const register = async (req, res) => {
     try {
         const { fullname, email, phoneNumber, password, role } = req.body;
 
         if (!fullname || !email || !phoneNumber || !password || !role) {
             return res.status(400).json({
-                message: "Something is missing",
+                message: "All required fields must be provided.",
                 success: false
             });
         }
 
-        const user = await User.findOne({ email });
-        if (user) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(String(email).trim())) {
             return res.status(400).json({
-                message: "User already exists with this email.",
-                success: false,
+                message: "Please provide a valid email address.",
+                success: false
             });
+        }
+
+        if (String(password).length < 6) {
+            return res.status(400).json({
+                message: "Password must be at least 6 characters long.",
+                success: false
+            });
+        }
+
+        const normalizedEmail = String(email).toLowerCase().trim();
+        const existingUser = await User.findOne({ email: normalizedEmail });
+        if (existingUser) {
+            return res.status(400).json({
+                message: "An account already exists with this email.",
+                success: false
+            });
+        }
+
+        let profilePhotoUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(fullname.trim())}`;
+        const file = req.file;
+        if (file) {
+            try {
+                const fileUri = getDataUri(file);
+                if (hasValidCloudinaryConfig()) {
+                    const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
+                        resource_type: "auto"
+                    });
+                    profilePhotoUrl = cloudResponse.secure_url;
+                } else if (file.mimetype?.startsWith("image/") && file.size <= 2 * 1024 * 1024) {
+                    profilePhotoUrl = fileUri.content;
+                }
+            } catch (uploadError) {
+                console.log("Avatar upload fallback used:", uploadError.message);
+            }
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        let profilePhotoUrl = "";
-        if (req.file) {
-            try {
-                const fileUri = getDataUri(req.file);
-                const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
-                    resource_type: "auto"
-                });
-                profilePhotoUrl = cloudResponse.secure_url;
-            } catch (uploadErr) {
-                console.warn("[Register Photo Upload Warning]:", uploadErr.message);
-                // Fallback to inline data URI for small images
-                if (req.file.size <= 2 * 1024 * 1024) {
-                    const fileUri = getDataUri(req.file);
-                    profilePhotoUrl = fileUri.content;
-                }
-            }
-        }
-
         await User.create({
-            fullname,
-            email,
-            phoneNumber,
+            fullname: fullname.trim(),
+            email: normalizedEmail,
+            phoneNumber: String(phoneNumber).trim(),
             password: hashedPassword,
             role,
             profile: {
-                profilePhoto: profilePhotoUrl,
+                profilePhoto: profilePhotoUrl
             }
         });
 
@@ -62,46 +100,46 @@ export const register = async (req, res) => {
             message: "Account created successfully.",
             success: true
         });
-
     } catch (error) {
         console.log(error);
         return res.status(500).json({
-            message: "Internal server error",
+            message: "Server error during registration.",
             success: false
         });
     }
 };
 
-/**
- * Authenticate User & issue HTTP-only JWT cookie
- */
 export const login = async (req, res) => {
     try {
         const { email, password, role } = req.body;
 
         if (!email || !password || !role) {
             return res.status(400).json({
-                message: "Something is missing",
+                message: "Email, password, and role are required.",
                 success: false
             });
         }
-        let user = await User.findOne({ email });
+
+        const normalizedEmail = String(email).toLowerCase().trim();
+        let user = await User.findOne({ email: normalizedEmail });
         if (!user) {
             return res.status(400).json({
                 message: "Incorrect email or password.",
-                success: false,
+                success: false
             });
         }
-        const isPasswordMatch = await bcrypt.compare(password, user.password);
+
+        const isPasswordMatch = await bcrypt.compare(String(password), user.password);
         if (!isPasswordMatch) {
             return res.status(400).json({
                 message: "Incorrect email or password.",
-                success: false,
+                success: false
             });
         }
+
         if (role !== user.role) {
             return res.status(400).json({
-                message: "Account doesn't exist with current role.",
+                message: `Account doesn't exist with the ${role} role.`,
                 success: false
             });
         }
@@ -109,212 +147,431 @@ export const login = async (req, res) => {
         const tokenData = {
             userId: user._id
         };
-        const token = jwt.sign(tokenData, process.env.SECRET_KEY, { expiresIn: '1d' });
-
-        user = {
-            _id: user._id,
-            fullname: user.fullname,
-            email: user.email,
-            phoneNumber: user.phoneNumber,
-            role: user.role,
-            profile: user.profile,
-            savedJobs: user.savedJobs || []
-        };
-
-        return res.status(200).cookie("token", token, {
-            maxAge: 1 * 24 * 60 * 60 * 1000,
-            httpOnly: true,
-            sameSite: 'strict'
-        }).json({
-            message: `Welcome back ${user.fullname}`,
-            user,
-            success: true
+        const token = jwt.sign(tokenData, process.env.SECRET_KEY || "jobportal_secret_key", {
+            expiresIn: "1d"
         });
+
+        return res
+            .status(200)
+            .cookie("token", token, {
+                maxAge: 24 * 60 * 60 * 1000,
+                httpOnly: true,
+                sameSite: "lax",
+                secure: process.env.NODE_ENV === "production"
+            })
+            .json({
+                message: `Welcome back ${user.fullname}`,
+                user: sanitizeUserPayload(user),
+                success: true
+            });
     } catch (error) {
         console.log(error);
         return res.status(500).json({
-            message: "Internal server error during login.",
+            message: "Server error during login.",
             success: false
         });
     }
 };
 
-/**
- * Clear authentication cookie on logout
- */
 export const logout = async (req, res) => {
     try {
-        return res.status(200).cookie("token", "", { maxAge: 0 }).json({
-            message: "Logged out successfully.",
-            success: true
-        });
+        return res
+            .status(200)
+            .cookie("token", "", { maxAge: 0, httpOnly: true, sameSite: "lax" })
+            .json({
+                message: "Logged out successfully.",
+                success: true
+            });
     } catch (error) {
         console.log(error);
         return res.status(500).json({
-            message: "Server error during logout.",
+            message: "Logout failed.",
             success: false
         });
     }
 };
 
-/**
- * Update User Profile (Works for both Students and Recruiters)
- * - Uses DataURI for PDF resumes (<= 4MB) so Chrome's PDF viewer NEVER fails with Cloudinary 401/404 PDF restrictions
- * - Uses Cloudinary (with DataURI fallback) for profile photos
- */
 export const updateProfile = async (req, res) => {
     try {
-        const { fullname, email, phoneNumber, bio, skills, profilePhotoUrl } = req.body;
+        const {
+            fullname,
+            email,
+            phoneNumber,
+            headline,
+            bio,
+            skills,
+            currentLocation,
+            preferredLocations,
+            experienceYears,
+            expectedCtc,
+            noticePeriod,
+            openToWork,
+            profilePhotoUrl,
+            parsedResumeText,
+            projects,
+            experience,
+            education,
+            socialLinks,
+            autoMergeResumeSkills
+        } = req.body;
 
         const userId = req.id;
         let user = await User.findById(userId);
 
         if (!user) {
-            return res.status(400).json({
+            return res.status(404).json({
                 message: "User not found.",
                 success: false
             });
         }
 
-        if (fullname) user.fullname = fullname;
-        if (email) user.email = email;
-        if (phoneNumber) user.phoneNumber = phoneNumber;
-        if (bio !== undefined) user.profile.bio = bio;
+        if (fullname) user.fullname = fullname.trim();
+        if (email) user.email = String(email).toLowerCase().trim();
+        if (phoneNumber) user.phoneNumber = String(phoneNumber).trim();
+
+        if (headline !== undefined) user.profile.headline = headline.trim();
+        if (bio !== undefined) user.profile.bio = bio.trim();
+        if (currentLocation !== undefined) user.profile.currentLocation = currentLocation.trim();
+        if (expectedCtc !== undefined) user.profile.expectedCtc = expectedCtc.trim();
+        if (noticePeriod !== undefined) user.profile.noticePeriod = noticePeriod.trim();
+        if (experienceYears !== undefined && experienceYears !== "") {
+            user.profile.experienceYears = Math.max(0, Number(experienceYears) || 0);
+        }
+        if (openToWork !== undefined) {
+            user.profile.openToWork = openToWork === true || openToWork === "true";
+        }
+
+        if (preferredLocations !== undefined) {
+            const locList = Array.isArray(preferredLocations)
+                ? preferredLocations
+                : String(preferredLocations)
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+            user.profile.preferredLocations = locList;
+        }
 
         if (skills !== undefined) {
-            const skillsArray = skills ? skills.split(",").map(skill => skill.trim()).filter(Boolean) : [];
+            const skillsArray = Array.isArray(skills)
+                ? skills
+                : String(skills)
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean);
             user.profile.skills = skillsArray;
         }
 
-        // Allow setting profile photo via direct URL if provided
         if (profilePhotoUrl && profilePhotoUrl.trim()) {
             user.profile.profilePhoto = profilePhotoUrl.trim();
         }
 
-        // Handle file upload (Image -> profilePhoto, PDF -> resume)
-        if (req.file) {
-            const fileUri = getDataUri(req.file);
-            const isImage = req.file.mimetype && req.file.mimetype.startsWith("image/");
+        // Parse structured JSON fields if sent via FormData or JSON
+        const parseJsonField = (val) => {
+            if (!val) return null;
+            if (typeof val === "object") return val;
+            try {
+                return JSON.parse(val);
+            } catch {
+                return null;
+            }
+        };
+
+        const parsedProjects = parseJsonField(projects);
+        if (Array.isArray(parsedProjects)) {
+            user.profile.projects = parsedProjects
+                .filter((p) => p && p.title && String(p.title).trim())
+                .map((p) => ({
+                    title: String(p.title).trim(),
+                    description: String(p.description || "").trim(),
+                    techStack: Array.isArray(p.techStack)
+                        ? p.techStack.map((t) => String(t).trim()).filter(Boolean)
+                        : String(p.techStack || "")
+                              .split(",")
+                              .map((t) => t.trim())
+                              .filter(Boolean),
+                    liveUrl: String(p.liveUrl || "").trim(),
+                    githubUrl: String(p.githubUrl || "").trim()
+                }));
+        }
+
+        const parsedExp = parseJsonField(experience);
+        if (Array.isArray(parsedExp)) {
+            user.profile.experience = parsedExp
+                .filter((e) => e && e.role && e.company)
+                .map((e) => ({
+                    role: String(e.role).trim(),
+                    company: String(e.company).trim(),
+                    duration: String(e.duration || "").trim(),
+                    description: String(e.description || "").trim()
+                }));
+        }
+
+        const parsedEdu = parseJsonField(education);
+        if (Array.isArray(parsedEdu)) {
+            user.profile.education = parsedEdu
+                .filter((ed) => ed && ed.degree && ed.institution)
+                .map((ed) => ({
+                    degree: String(ed.degree).trim(),
+                    institution: String(ed.institution).trim(),
+                    year: String(ed.year || "").trim(),
+                    grade: String(ed.grade || "").trim()
+                }));
+        }
+
+        const parsedSocial = parseJsonField(socialLinks);
+        if (parsedSocial && typeof parsedSocial === "object") {
+            user.profile.socialLinks = {
+                github: String(parsedSocial.github ?? user.profile.socialLinks?.github ?? "").trim(),
+                linkedin: String(parsedSocial.linkedin ?? user.profile.socialLinks?.linkedin ?? "").trim(),
+                portfolio: String(parsedSocial.portfolio ?? user.profile.socialLinks?.portfolio ?? "").trim(),
+                leetcode: String(parsedSocial.leetcode ?? user.profile.socialLinks?.leetcode ?? "").trim(),
+                twitter: String(parsedSocial.twitter ?? user.profile.socialLinks?.twitter ?? "").trim()
+            };
+        }
+
+        // If user manually edited or pasted resume text
+        if (parsedResumeText !== undefined && !req.file) {
+            const analysis = analyzeResumeText(parsedResumeText, user.profile.resumeOriginalName || "Resume.txt");
+            user.profile.parsedResumeText = analysis.parsedText;
+            user.profile.extractedSkills = analysis.extractedSkills;
+            user.profile.resumeAtsScore = analysis.atsReadinessScore;
+            user.profile.resumeParsedAt = new Date();
+        }
+
+        // Handle File Upload (PDF, Word .docx/.doc, or Profile Photo)
+        const file = req.file;
+        let resumeParseResult = null;
+
+        if (file) {
+            const isImage = file.mimetype?.startsWith("image/");
+            const fileUri = getDataUri(file);
 
             if (isImage) {
-                try {
-                    const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
-                        resource_type: "image"
-                    });
-                    user.profile.profilePhoto = cloudResponse.secure_url;
-                } catch (cloudErr) {
-                    console.warn("[Cloudinary Image Upload Fallback]:", cloudErr.message);
+                if (hasValidCloudinaryConfig()) {
+                    try {
+                        const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
+                            resource_type: "image"
+                        });
+                        user.profile.profilePhoto = cloudResponse.secure_url;
+                    } catch {
+                        if (file.size <= 3 * 1024 * 1024) {
+                            user.profile.profilePhoto = fileUri.content;
+                        }
+                    }
+                } else if (file.size <= 3 * 1024 * 1024) {
                     user.profile.profilePhoto = fileUri.content;
                 }
             } else {
-                // For PDF resumes: store inline base64 DataURI if under 4.5MB so Chrome PDF viewer
-                // renders it reliably without Cloudinary free-tier PDF delivery restrictions!
-                if (req.file.size <= 4.5 * 1024 * 1024) {
-                    user.profile.resume = fileUri.content;
-                    user.profile.resumeOriginalName = req.file.originalname;
-                } else {
+                // Resume File (.pdf, .docx, .doc, .txt) -> Parse Resume & Store for Convenient Viewing
+                resumeParseResult = parseResumeFile(file);
+                user.profile.resumeOriginalName = file.originalname;
+                user.profile.resumeMimeType = file.mimetype || "application/pdf";
+                user.profile.parsedResumeText = resumeParseResult.parsedText;
+                user.profile.extractedSkills = resumeParseResult.extractedSkills;
+                user.profile.resumeAtsScore = resumeParseResult.atsReadinessScore;
+                user.profile.resumeParsedAt = resumeParseResult.parsedAt;
+
+                // Automatically merge newly discovered skills from the resume into the user's skill list
+                if (autoMergeResumeSkills !== "false" && resumeParseResult.extractedSkills.length > 0) {
+                    const existingSkillsLower = new Set(
+                        (user.profile.skills || []).map((s) => s.toLowerCase())
+                    );
+                    const mergedSkills = [...(user.profile.skills || [])];
+                    for (const extracted of resumeParseResult.extractedSkills) {
+                        if (!existingSkillsLower.has(extracted.toLowerCase())) {
+                            mergedSkills.push(extracted);
+                            existingSkillsLower.add(extracted.toLowerCase());
+                        }
+                    }
+                    user.profile.skills = mergedSkills;
+                }
+
+                // Auto-fill social links if empty and detected in resume
+                if (resumeParseResult.detectedLinks?.github && !user.profile.socialLinks?.github) {
+                    user.profile.socialLinks = {
+                        ...(user.profile.socialLinks || {}),
+                        github: resumeParseResult.detectedLinks.github
+                    };
+                }
+                if (resumeParseResult.detectedLinks?.linkedin && !user.profile.socialLinks?.linkedin) {
+                    user.profile.socialLinks = {
+                        ...(user.profile.socialLinks || {}),
+                        linkedin: resumeParseResult.detectedLinks.linkedin
+                    };
+                }
+                if (
+                    resumeParseResult.estimatedExperienceYears !== null &&
+                    !user.profile.experienceYears
+                ) {
+                    user.profile.experienceYears = resumeParseResult.estimatedExperienceYears;
+                }
+
+                // Upload to Cloudinary if configured, or store data URI for instant in-browser viewing
+                if (hasValidCloudinaryConfig()) {
                     try {
                         const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
-                            resource_type: "raw"
+                            resource_type: "auto"
                         });
                         user.profile.resume = cloudResponse.secure_url;
-                        user.profile.resumeOriginalName = req.file.originalname;
-                    } catch (cloudErr) {
-                        console.warn("[Cloudinary PDF Upload Error]:", cloudErr.message);
+                    } catch {
+                        if (file.size <= 4 * 1024 * 1024) {
+                            user.profile.resume = fileUri.content;
+                        }
                     }
+                } else if (file.size <= 4 * 1024 * 1024) {
+                    user.profile.resume = fileUri.content;
+                } else {
+                    user.profile.resume = `parsed://${encodeURIComponent(file.originalname)}`;
                 }
             }
         }
 
         await user.save();
 
-        const updatedUser = {
-            _id: user._id,
-            fullname: user.fullname,
-            email: user.email,
-            phoneNumber: user.phoneNumber,
-            role: user.role,
-            profile: user.profile,
-            savedJobs: user.savedJobs
-        };
-
         return res.status(200).json({
-            message: "Profile updated successfully.",
-            user: updatedUser,
+            message: resumeParseResult
+                ? `Profile updated & Resume parsed (${resumeParseResult.extractedSkills.length} skills extracted for matchmaking)!`
+                : "Profile updated successfully.",
+            user: sanitizeUserPayload(user),
+            resumeAnalysis: resumeParseResult,
             success: true
         });
-
     } catch (error) {
         console.log(error);
         return res.status(500).json({
-            message: "Server error during profile update.",
+            message: "Failed to update profile.",
             success: false
         });
     }
 };
 
 /**
- * Bookmark or unbookmark a job for later viewing
+ * Dedicated endpoint to parse a PDF/Word resume and immediately sync skills for matchmaking
  */
-export const toggleSaveJob = async (req, res) => {
+export const parseAndSaveResume = async (req, res) => {
+    try {
+        const userId = req.id;
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found." });
+        }
+
+        const file = req.file;
+        const { rawResumeText } = req.body;
+
+        if (!file && !rawResumeText) {
+            return res.status(400).json({
+                success: false,
+                message: "Please upload a PDF or Word (.docx/.doc) file or provide resume text."
+            });
+        }
+
+        const analysis = file
+            ? parseResumeFile(file)
+            : analyzeResumeText(rawResumeText, user.profile.resumeOriginalName || "Resume.txt");
+
+        if (file) {
+            const fileUri = getDataUri(file);
+            user.profile.resumeOriginalName = file.originalname;
+            user.profile.resumeMimeType = file.mimetype || "application/pdf";
+            if (hasValidCloudinaryConfig()) {
+                try {
+                    const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
+                        resource_type: "auto"
+                    });
+                    user.profile.resume = cloudResponse.secure_url;
+                } catch {
+                    if (file.size <= 4 * 1024 * 1024) user.profile.resume = fileUri.content;
+                }
+            } else if (file.size <= 4 * 1024 * 1024) {
+                user.profile.resume = fileUri.content;
+            }
+        }
+
+        user.profile.parsedResumeText = analysis.parsedText;
+        user.profile.extractedSkills = analysis.extractedSkills;
+        user.profile.resumeAtsScore = analysis.atsReadinessScore;
+        user.profile.resumeParsedAt = analysis.parsedAt;
+
+        // Merge extracted skills into profile.skills
+        const existingLower = new Set((user.profile.skills || []).map((s) => s.toLowerCase()));
+        const merged = [...(user.profile.skills || [])];
+        for (const sk of analysis.extractedSkills) {
+            if (!existingLower.has(sk.toLowerCase())) {
+                merged.push(sk);
+                existingLower.add(sk.toLowerCase());
+            }
+        }
+        user.profile.skills = merged;
+
+        if (!user.profile.bio && analysis.extractedSummary) {
+            user.profile.bio = analysis.extractedSummary;
+        }
+
+        await user.save();
+
+        return res.status(200).json({
+            success: true,
+            message: `Resume parsed! Extracted ${analysis.extractedSkills.length} skills & updated your job matchmaking profile.`,
+            user: sanitizeUserPayload(user),
+            resumeAnalysis: analysis
+        });
+    } catch (error) {
+        console.log(error);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to parse resume."
+        });
+    }
+};
+
+export const saveJob = async (req, res) => {
     try {
         const userId = req.id;
         const jobId = req.params.id;
 
         const user = await User.findById(userId);
         if (!user) {
-            return res.status(404).json({
-                message: "User not found.",
-                success: false
-            });
+            return res.status(404).json({ message: "User not found", success: false });
         }
 
-        const isAlreadySaved = user.savedJobs.some(id => id.toString() === jobId);
+        const isAlreadySaved = user.savedJobs.some((id) => String(id) === String(jobId));
 
         if (isAlreadySaved) {
-            user.savedJobs = user.savedJobs.filter(id => id.toString() !== jobId);
+            user.savedJobs = user.savedJobs.filter((id) => String(id) !== String(jobId));
             await user.save();
             return res.status(200).json({
-                message: "Job removed from saved items.",
-                success: true,
-                saved: false
+                message: "Job removed from saved list.",
+                saved: false,
+                success: true
             });
         } else {
             user.savedJobs.push(jobId);
             await user.save();
             return res.status(200).json({
-                message: "Job saved successfully.",
-                success: true,
-                saved: true
+                message: "Job bookmarked successfully!",
+                saved: true,
+                success: true
             });
         }
     } catch (error) {
         console.log(error);
-        return res.status(500).json({
-            message: "Server error",
-            success: false
-        });
+        return res.status(500).json({ message: "Server error", success: false });
     }
 };
 
-/**
- * Fetch all bookmarked jobs populated with company details
- */
 export const getSavedJobs = async (req, res) => {
     try {
         const userId = req.id;
         const user = await User.findById(userId).populate({
-            path: 'savedJobs',
+            path: "savedJobs",
             populate: {
-                path: 'company'
+                path: "company"
             }
         });
 
         if (!user) {
-            return res.status(404).json({
-                message: "User not found.",
-                success: false
-            });
+            return res.status(404).json({ message: "User not found", success: false });
         }
 
         return res.status(200).json({
@@ -323,9 +580,6 @@ export const getSavedJobs = async (req, res) => {
         });
     } catch (error) {
         console.log(error);
-        return res.status(500).json({
-            message: "Server error",
-            success: false
-        });
+        return res.status(500).json({ message: "Server error", success: false });
     }
 };

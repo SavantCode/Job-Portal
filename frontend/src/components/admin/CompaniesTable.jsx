@@ -7,12 +7,13 @@ import { useSelector } from 'react-redux'
 import { useNavigate } from 'react-router-dom'
 
 const CompaniesTable = () => {
-    const { companies, searchCompanyByText } = useSelector(store => store.company);
-    const [filterCompany, setFilterCompany] = useState(companies);
+    const { companies = [], searchCompanyByText } = useSelector(store => store.company);
+    const [filterCompany, setFilterCompany] = useState(companies || []);
     const navigate = useNavigate();
 
     useEffect(() => {
-        const filteredCompany = companies.length >= 0 && companies.filter((company) => {
+        const list = Array.isArray(companies) ? companies : [];
+        const filteredCompany = list.filter((company) => {
             if (!searchCompanyByText) {
                 return true;
             }
