@@ -18,10 +18,14 @@ import {
     validateObjectIdParams
 } from "./middlewares/security.js";
 import { idempotencyMiddleware } from "./middlewares/idempotency.js";
+import { startKeepAliveCron, getKeepAliveStats } from "./utils/keepAliveCron.js";
 
 dotenv.config({});
 
 const app = express();
+
+// Required on Render, Railway & Vercel proxies so req.ip & secure cookies work accurately
+app.set("trust proxy", 1);
 
 // 1. High-Resolution Request Latency Tracker (X-Response-Time + P50/P95/P99 Telemetry)
 app.use(requestLatencyTracker);
@@ -37,11 +41,12 @@ app.use(cookieParser());
 // 4. MongoDB NoSQL Operator Injection & XSS Sanitizer
 app.use(mongoSanitizeAndXss);
 
-// 5. Strict CORS Configuration
+// 5. Production-Ready CORS Configuration (Supports Localhost, FRONTEND_URL, and Vercel/Render deployments)
 const allowedOrigins = [
     process.env.FRONTEND_URL,
     "http://localhost:5173",
     "http://localhost:3000",
+    "http://localhost:3005",
     "http://localhost:3006"
 ].filter(Boolean);
 
@@ -50,7 +55,9 @@ const corsOptions = {
         if (
             !origin ||
             allowedOrigins.includes(origin) ||
-            /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)
+            /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin) ||
+            /^https:\/\/[a-zA-Z0-9-]+\.vercel\.app$/.test(origin) ||
+            /^https:\/\/[a-zA-Z0-9-]+\.onrender\.com$/.test(origin)
         ) {
             callback(null, true);
         } else {
@@ -63,13 +70,15 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // 6. Tiered Sliding-Window Rate Limiters
-// Note: /login and /register use dedicated loginRateLimiter & signupRateLimiter inside user.route.js
-// to avoid double-counting against the same request. SSE streams are skipped from rate-limiting.
+// SSE streams and Keep-Alive Cron pings are skipped from rate-limiting.
 const globalLimiter = createRateLimiter({
     windowMs: 15 * 60 * 1000,
     max: 800,
     keyPrefix: "global",
-    skip: (req) => req.originalUrl?.includes("/notification/stream"),
+    skip: (req) =>
+        req.originalUrl?.includes("/notification/stream") ||
+        req.headers?.["x-keep-alive-cron"] === "true" ||
+        req.query?.source === "keepalive-cron",
     message: "Too many API requests from this IP, please wait a few minutes."
 });
 const aiLimiter = createRateLimiter({
@@ -98,7 +107,7 @@ app.use("/api/v1/job/post", idempotencyMiddleware);
 app.param("id", validateObjectIdParams);
 app.param("jobId", validateObjectIdParams);
 
-// 9. Health Check Endpoint
+// 9. Health Check & Render Keep-Alive Endpoint
 app.get("/api/v1/health", (req, res) => {
     return res.status(200).json({
         success: true,
@@ -107,6 +116,7 @@ app.get("/api/v1/health", (req, res) => {
         mongoSanitize: "active",
         lruCache: "active",
         sseBroker: "active",
+        keepAliveCron: getKeepAliveStats(),
         uptimeSeconds: Math.round(process.uptime()),
         timestamp: new Date().toISOString()
     });
@@ -140,5 +150,6 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
     connectDB();
+    startKeepAliveCron();
     console.log(`Server running at port ${PORT}`);
 });

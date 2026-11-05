@@ -11,6 +11,7 @@ import { backgroundQueue } from "../utils/backgroundQueue.js";
 import { getIdempotencyStats } from "../middlewares/idempotency.js";
 import { getSecurityAndLatencyStats } from "../middlewares/security.js";
 import { computeJobAnalyticsFacet, computeRecruiterPipelineFacet, withAcidTransaction } from "../utils/dbEngine.js";
+import { getKeepAliveStats } from "../utils/keepAliveCron.js";
 
 /**
  * Helper to mask IP addresses in multi-tenant logs when viewed across organizations
@@ -28,7 +29,7 @@ const maskIpAddress = (ip = "") => {
 /**
  * GET /api/v1/system/health
  * Real-time System Health, MongoDB Ping Latency, P50/P95/P99 HTTP Latency,
- * LRU Cache Hit Ratio, Active SSE Connections, and Rate-Limiter Counters.
+ * LRU Cache Hit Ratio, Active SSE Connections, Keep-Alive Cron & Rate-Limiter Counters.
  */
 export const getSystemHealthAndTelemetry = async (_req, res) => {
     try {
@@ -66,7 +67,8 @@ export const getSystemHealthAndTelemetry = async (_req, res) => {
             cache: jobCache.getStats(),
             sseBroker: sseBroker.getStats(),
             backgroundQueue: backgroundQueue.getStats(),
-            idempotency: getIdempotencyStats()
+            idempotency: getIdempotencyStats(),
+            keepAliveCron: getKeepAliveStats()
         });
     } catch (error) {
         return res.status(500).json({
@@ -80,13 +82,6 @@ export const getSystemHealthAndTelemetry = async (_req, res) => {
 /**
  * GET /api/v1/system/hq-overview
  * Complete Platform Headquarters (Admin HQ) Aggregation & Intelligence Endpoint.
- * Computes:
- * 1. Global KPIs (Job Seekers, Recruiters, Companies, Jobs, Applications, Resume Upload %, Avg ATS Score)
- * 2. 8-Stage Hiring Pipeline Conversion Funnel across the entire platform
- * 3. Skill Demand vs. Candidate Supply Gap Analysis (Top skills recruiters want vs. candidate supply)
- * 4. Job Market Breakdown by Location, Job Type, and Salary Ranges
- * 5. Enriched Job Seekers Directory & Recruiters Directory
- * 6. Complete Platform Jobs Inventory with applicant & conversion stats
  */
 export const getPlatformHeadquartersOverview = async (req, res) => {
     try {
@@ -124,7 +119,6 @@ export const getPlatformHeadquartersOverview = async (req, res) => {
             computeRecruiterPipelineFacet([])
         ]);
 
-        // Seed an initial AuditLog event if collection is empty so HQ Audit tab always has real data
         if (auditCount === 0) {
             await AuditLog.create({
                 action: "HQ_TELEMETRY_INITIALIZED",
@@ -145,7 +139,6 @@ export const getPlatformHeadquartersOverview = async (req, res) => {
         const students = users.filter((u) => u.role === "student");
         const recruiters = users.filter((u) => u.role === "recruiter");
 
-        // 1. 8-Stage Hiring Pipeline Funnel Aggregation
         const stageOrder = [
             "applied",
             "shortlisted",
@@ -178,7 +171,6 @@ export const getPlatformHeadquartersOverview = async (req, res) => {
             return { stage, count, percentage };
         });
 
-        // 2. Top In-Demand Tech Skills (from Jobs) vs. Candidate Supply (from Student Profiles)
         const demandSkillMap = new Map();
         jobs.forEach((job) => {
             const reqs = Array.isArray(job.requirements)
@@ -219,7 +211,6 @@ export const getPlatformHeadquartersOverview = async (req, res) => {
                 };
             });
 
-        // 3. Location & Work-Type Distribution
         const locationCounts = new Map();
         const jobTypeCounts = new Map();
         jobs.forEach((j) => {
@@ -238,7 +229,6 @@ export const getPlatformHeadquartersOverview = async (req, res) => {
             .sort((a, b) => b[1] - a[1])
             .map(([jobType, count]) => ({ jobType, count }));
 
-        // 4. Enriched Job Seekers Directory
         const jobSeekersDirectory = students.map((stu) => {
             const stuApps = applications.filter(
                 (a) => String(a.applicant?._id || a.applicant) === String(stu._id)
@@ -248,7 +238,6 @@ export const getPlatformHeadquartersOverview = async (req, res) => {
             );
             const hasResume = Boolean(stu.profile?.resume || stu.profile?.parsedResumeText);
 
-            // Deterministic ATS readiness score based on profile completeness & parsed resume
             let computedAts = 45;
             if (hasResume) computedAts += 20;
             if (combinedSkills.length >= 3) computedAts += 15;
@@ -276,7 +265,6 @@ export const getPlatformHeadquartersOverview = async (req, res) => {
             };
         });
 
-        // 5. Enriched Recruiters Directory
         const recruitersDirectory = recruiters.map((rec) => {
             const recCompanies = companies.filter(
                 (c) => String(c.userId?._id || c.userId) === String(rec._id)
@@ -313,7 +301,6 @@ export const getPlatformHeadquartersOverview = async (req, res) => {
             };
         });
 
-        // 6. Platform Jobs Inventory for HQ Moderation & Inspection
         const jobsInventory = jobs.map((j) => {
             const jobApps = applications.filter(
                 (a) => String(a.job?._id || a.job) === String(j._id)
@@ -335,7 +322,6 @@ export const getPlatformHeadquartersOverview = async (req, res) => {
             };
         });
 
-        // 7. Active MongoDB Collection Indexes Inventory
         const dbIndexes = {
             Job: [
                 "Job_ESR_Discovery_Index ({ location: 1, jobType: 1, createdAt: -1, experienceLevel: 1 })",
@@ -426,7 +412,6 @@ export const getPlatformHeadquartersOverview = async (req, res) => {
 
 /**
  * GET /api/v1/system/audit-logs
- * Supports filtering by status (SUCCESS, BLOCKED, FAILURE) and scope (platform vs. tenant).
  */
 export const getAuditLogs = async (req, res) => {
     try {
@@ -482,8 +467,6 @@ export const getAuditLogs = async (req, res) => {
 
 /**
  * POST /api/v1/system/audit-logs/test
- * Allows the Maintainer / Recruiter to trigger a live verification audit event
- * from Platform Headquarters to demonstrate append-only audit logging in interviews.
  */
 export const createTestAuditEvent = async (req, res) => {
     try {
@@ -518,7 +501,6 @@ export const createTestAuditEvent = async (req, res) => {
 
 /**
  * DELETE /api/v1/system/hq/job/:id
- * Platform Maintainer moderation: atomically remove a job and its applications from HQ.
  */
 export const adminDeleteJobFromHq = async (req, res) => {
     try {
