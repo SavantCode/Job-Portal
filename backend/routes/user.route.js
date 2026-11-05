@@ -15,7 +15,8 @@ import { loginRateLimiter, signupRateLimiter } from "../middlewares/security.js"
 const router = express.Router();
 
 // Rate-limited Signup & Login for all roles (Student & Recruiter)
-router.route("/register").post(signupRateLimiter, singleUpload, register);
+// Note: singleUpload runs before signupRateLimiter so req.body.email/role are parsed from multipart form-data!
+router.route("/register").post(singleUpload, signupRateLimiter, register);
 router.route("/login").post(loginRateLimiter, login);
 router.route("/logout").get(logout);
 

@@ -1,22 +1,111 @@
 import { GoogleGenAI } from "@google/genai";
-import { User } from "../models/user.model.js";
 import { Job } from "../models/job.model.js";
-import dotenv from "dotenv";
+import { User } from "../models/user.model.js";
 
-dotenv.config();
+/**
+ * Multi-Provider LLM Engine:
+ * 1. Primary: Groq Cloud API (`GROQ_API_KEY` + `GROQ_MODEL`, e.g., `openai/gpt-oss-20b`, fallback `llama-3.3-70b-versatile`)
+ * 2. Secondary: Google Gemini API (`GEMINI_API_KEY` — validated to start with `AIza` to prevent 401 ACCESS_TOKEN_TYPE_UNSUPPORTED errors)
+ * 3. Tertiary: Deterministic, zero-latency domain fallback so features never fail offline
+ */
+let geminiAuthFailed = false;
 
-const getGeminiClient = () => {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key || key.includes("your_") || key.trim() === "") return null;
-    try {
-        return new GoogleGenAI({ apiKey: key });
-    } catch {
+const getValidGeminiClient = () => {
+    if (geminiAuthFailed) return null;
+    const key = (process.env.GEMINI_API_KEY || "").trim().replace(/^["']|["']$/g, "");
+    // Valid Google Gemini API keys always begin with "AIza"
+    if (!key || !key.startsWith("AIza") || key.includes("your_")) {
         return null;
     }
+    return new GoogleGenAI({ apiKey: key });
+};
+
+const getGroqConfig = () => {
+    const apiKey = (process.env.GROQ_API_KEY || "").trim().replace(/^["']|["']$/g, "");
+    const preferredModel = (process.env.GROQ_MODEL || "openai/gpt-oss-20b").trim().replace(/^["']|["']$/g, "");
+    if (!apiKey || apiKey.includes("your_")) {
+        return null;
+    }
+    return {
+        apiKey,
+        models: Array.from(new Set([preferredModel, "llama-3.3-70b-versatile", "llama-3.1-8b-instant"])).filter(Boolean)
+    };
+};
+
+/**
+ * Calls Groq first (using GROQ_MODEL=openai/gpt-oss-20b), then Gemini if valid, returning plain text or null.
+ */
+const generateTextWithLLM = async (prompt, { systemPrompt = "You are an expert technical recruiter and career coach.", maxTokens = 450, temperature = 0.6 } = {}) => {
+    // 1. Try Groq API first
+    const groq = getGroqConfig();
+    if (groq) {
+        for (const modelName of groq.models) {
+            try {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 8500);
+
+                const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${groq.apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: modelName,
+                        messages: [
+                            { role: "system", content: systemPrompt },
+                            { role: "user", content: prompt }
+                        ],
+                        temperature,
+                        max_tokens: maxTokens
+                    }),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timer);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const content = data?.choices?.[0]?.message?.content?.trim();
+                    if (content) {
+                        // Strip <think>...</think> reasoning blocks if returned by reasoning models
+                        const cleaned = content.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+                        if (cleaned) return cleaned;
+                    }
+                } else if (response.status === 401 || response.status === 403) {
+                    // Invalid Groq key; stop trying other Groq models
+                    break;
+                }
+            } catch {
+                // Continue to fallback Groq model or Gemini
+            }
+        }
+    }
+
+    // 2. Try Google Gemini API if a valid AIza* key is configured
+    const gemini = getValidGeminiClient();
+    if (gemini) {
+        try {
+            const response = await gemini.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: `${systemPrompt}\n\n${prompt}`
+            });
+            const text = response?.text?.trim();
+            if (text) return text;
+        } catch (err) {
+            const msg = String(err?.message || "");
+            if (msg.includes("401") || msg.includes("403") || msg.includes("API key not valid") || msg.includes("UNAUTHENTICATED")) {
+                geminiAuthFailed = true;
+            }
+        }
+    }
+
+    return null;
 };
 
 /**
  * 1. Generate Cover Letter / Quick Pitch
+ * Uses Groq (GROQ_MODEL=openai/gpt-oss-20b) -> Gemini -> Deterministic Fallback
  * Incorporates user's profile skills, parsed resume text, and projects
  */
 export const generateCoverLetter = async (req, res) => {
@@ -55,30 +144,23 @@ export const generateCoverLetter = async (req, res) => {
             .map((p) => `${p.title} (${(p.techStack || []).join(", ")})`)
             .join("; ");
 
-        const ai = getGeminiClient();
-        if (ai) {
-            try {
-                const prompt = `Write a concise, high-impact 100-word cover letter / outreach pitch for ${user.fullname} applying for the ${jobTitle} role at ${companyName}.
+        const prompt = `Write a concise, high-impact 100-word cover letter / outreach pitch for ${user.fullname} applying for the ${jobTitle} role at ${companyName}.
 Candidate Skills: ${candidateSkills.join(", ") || "Full Stack Development"}
 Candidate Projects: ${topProjects || "Production web applications"}
 Candidate Bio/Resume Context: ${(user.profile?.bio || user.profile?.parsedResumeText || "").slice(0, 500)}
 Job Description: ${jobDescription.slice(0, 600)}
-Return plain text only, professional and enthusiastic tone, around 90-110 words.`;
+Return plain text only (no markdown headings or placeholders), professional and enthusiastic tone, around 90-115 words.`;
 
-                const response = await ai.models.generateContent({
-                    model: "gemini-2.5-flash",
-                    contents: prompt
-                });
-                const text = response?.text?.trim();
-                if (text) {
-                    return res.status(200).json({
-                        success: true,
-                        coverLetter: text
-                    });
-                }
-            } catch (err) {
-                console.log("Gemini fallback used for cover letter:", err.message);
-            }
+        const aiPitch = await generateTextWithLLM(prompt, {
+            systemPrompt: "You write concise, executive-ready 100-word candidate cover letters tailored to the role and company. Output only the cover letter text.",
+            maxTokens: 350
+        });
+
+        if (aiPitch) {
+            return res.status(200).json({
+                success: true,
+                coverLetter: aiPitch
+            });
         }
 
         const skillsPhrase =
@@ -151,59 +233,48 @@ export const getAtsMatchScore = async (req, res) => {
         const missingSkills = [];
 
         rawReqs.forEach((reqSkill) => {
-            const cleanReq = reqSkill.toLowerCase().replace(/\.js$/i, "").trim();
-            if (!cleanReq) return;
-            if (userCorpus.includes(cleanReq) || userCorpus.includes(reqSkill.toLowerCase())) {
+            const clean = reqSkill.toLowerCase().replace(/\.js$/i, "").trim();
+            if (!clean) return;
+            if (userCorpus.includes(clean) || userCorpus.includes(reqSkill.toLowerCase())) {
                 matchedSkills.push(reqSkill);
             } else {
                 missingSkills.push(reqSkill);
             }
         });
 
-        let score = 0;
-        if (rawReqs.length > 0) {
-            score = Math.round((matchedSkills.length / rawReqs.length) * 100);
+        let score = rawReqs.length > 0 ? Math.round((matchedSkills.length / rawReqs.length) * 100) : 70;
+        if (user.profile?.parsedResumeText) {
+            score = Math.min(98, score + 5);
+        }
+        score = Math.max(15, Math.min(99, score));
+
+        let summary = "";
+        if (score >= 75) {
+            summary = `Strong ATS alignment (${score}%)! Your profile & parsed resume match ${matchedSkills.length} of ${rawReqs.length} core requirements for ${job.title}.`;
+        } else if (score >= 50) {
+            summary = `Moderate match (${score}%). Highlighting ${missingSkills.slice(0, 3).join(", ")} in your resume or projects will boost your shortlist probability.`;
         } else {
-            score = user.profile?.skills?.length > 0 || user.profile?.parsedResumeText ? 78 : 45;
+            summary = `Low keyword overlap (${score}%). Add missing skills like ${missingSkills.slice(0, 3).join(", ")} and upload your latest PDF/Word resume.`;
         }
-
-        const titleWords = (job.title || "")
-            .toLowerCase()
-            .split(/\s+/)
-            .filter((w) => w.length > 3);
-        const titleOverlap = titleWords.filter((w) => userCorpus.includes(w)).length;
-        if (titleOverlap > 0 && score < 95) {
-            score = Math.min(98, score + titleOverlap * 4);
-        }
-
-        const usedParsedResume = Boolean(user.profile?.parsedResumeText);
-        const summary =
-            score >= 75
-                ? `Strong ATS Match (${score}%)! Your ${usedParsedResume ? "parsed resume, projects & skills" : "profile skills"} closely align with ${job.company?.name || "this role"}.`
-                : score >= 50
-                ? `Moderate Match (${score}%). Adding ${missingSkills.slice(0, 3).join(", ") || "key role keywords"} to your resume or projects will boost your ranking.`
-                : `Low Match (${score}%). Upload your latest PDF/Word resume or add ${missingSkills.slice(0, 3).join(", ")} to improve matchmaking.`;
 
         return res.status(200).json({
             success: true,
             score,
             matchedSkills,
             missingSkills,
-            usedParsedResume,
-            resumeFileName: user.profile?.resumeOriginalName || "",
             summary
         });
     } catch (error) {
         console.log(error);
         return res.status(500).json({
             success: false,
-            message: "Failed to calculate ATS match score."
+            message: "Failed to compute ATS match score."
         });
     }
 };
 
 /**
- * 3. Generate Tailored XYZ Resume Bullet Points
+ * 3. AI Resume Bullet Point Improver (XYZ Formula)
  */
 export const generateResumeBullets = async (req, res) => {
     try {
@@ -216,6 +287,30 @@ export const generateResumeBullets = async (req, res) => {
         const s1 = targetSkills[0] || "React.js";
         const s2 = targetSkills[1] || "Node.js";
         const s3 = targetSkills[2] || "Cloud & CI/CD";
+
+        const prompt = `Write exactly 3 high-impact, quantifiable resume bullet points using Google's XYZ formula ("Accomplished [X] as measured by [Y], by doing [Z]") for a ${roleTitle} candidate.
+Incorporate these technical skills naturally: ${targetSkills.join(", ") || "React.js, Node.js, AWS"}.
+Return ONLY 3 lines, one bullet point per line, without numbering or markdown symbols.`;
+
+        const llmText = await generateTextWithLLM(prompt, {
+            systemPrompt: "You write ATS-optimized engineering resume bullet points with concrete metrics.",
+            maxTokens: 300
+        });
+
+        if (llmText) {
+            const parsedBullets = llmText
+                .split(/\r?\n/)
+                .map((line) => line.replace(/^[-•*\d.)\s]+/, "").trim())
+                .filter((line) => line.length > 25)
+                .slice(0, 3);
+
+            if (parsedBullets.length === 3) {
+                return res.status(200).json({
+                    success: true,
+                    bullets: parsedBullets
+                });
+            }
+        }
 
         const bullets = [
             `Architected and shipped scalable ${roleTitle} features using ${s1} and ${s2}, reducing API latency by 34% and supporting 50K+ active users.`,
@@ -258,7 +353,7 @@ export const generateJobDescription = async (req, res) => {
             requirements = "Python, PyTorch, TensorFlow, SQL, Pandas, Scikit-Learn, Docker, AWS";
             suggestedSalary = "15-25";
         } else if (lower.includes("devops") || lower.includes("cloud") || lower.includes("sre")) {
-            requirements = "AWS, Kubernetes, Docker, Terraform, CI/CD, Linux, Prometheus, GitHub Actions";
+            requirements = "AWS, Docker, Kubernetes, Terraform, CI/CD, Linux, Prometheus, Python";
             suggestedSalary = "15-25";
         } else if (lower.includes("intern") || lower.includes("fresher") || lower.includes("junior")) {
             suggestedSalary = "6-10";
@@ -268,7 +363,20 @@ export const generateJobDescription = async (req, res) => {
             suggestedExperience = 5;
         }
 
-        const description = `Role Overview:\nWe at ${companyName} are looking for a high-ownership ${title} (${jobType}, ${location}) to design, build, and scale mission-critical product capabilities.\n\nKey Responsibilities:\n• Architect, develop, and maintain modular, high-performance systems using ${requirements.split(",").slice(0, 4).join(",")}.\n• Collaborate closely with product managers, designers, and fellow engineers to deliver customer-facing features end-to-end.\n• Write clean, well-tested, and maintainable code while participating in code reviews and architectural discussions.\n• Optimize application performance, security, and observability in production environments.`;
+        let description = `Role Overview:\nWe at ${companyName} are looking for a high-ownership ${title} (${jobType}, ${location}) to design, build, and scale mission-critical product capabilities.\n\nKey Responsibilities:\n• Architect, develop, and maintain modular, high-performance systems using ${requirements.split(",").slice(0, 4).join(",")}.\n• Collaborate closely with product managers, designers, and fellow engineers to deliver customer-facing features end-to-end.\n• Write clean, well-tested, and maintainable code while participating in code reviews and architectural discussions.\n• Optimize application performance, security, and observability in production environments.`;
+
+        const prompt = `Write a professional job description for "${title}" at "${companyName}" (${jobType}, ${location}).
+Include a 2-sentence "Role Overview:" followed by "Key Responsibilities:" with 4 bullet points using "•".
+Keep it under 140 words and plain text only.`;
+
+        const aiDescription = await generateTextWithLLM(prompt, {
+            systemPrompt: "You are a senior technical recruiter writing clear, structured job descriptions.",
+            maxTokens: 320
+        });
+
+        if (aiDescription && aiDescription.length > 60) {
+            description = aiDescription;
+        }
 
         return res.status(200).json({
             success: true,
@@ -308,22 +416,22 @@ export const generateInterviewPrep = async (req, res) => {
             {
                 type: "Technical Core",
                 question: `In the context of ${role} at ${company}, how do you architect and optimize ${s1} workflows for high concurrency and maintainability?`,
-                keyConcepts: [s1, "scalability", "modular architecture", "performance", "error handling"],
-                tip: `Explain trade-offs, state/data flow, and cite a concrete metric or production bottleneck you solved using ${s1}.`,
-                answer: `A strong architecture in ${s1} separates domain logic from I/O, uses caching/memoization for hot paths, enforces strict schema validation, and monitors p95 latency with structured observability.`
+                keyConcepts: [s1, "scalability", "modularity", "caching", "error handling"],
+                tip: `Focus on how you structure ${s1} in production, handle edge cases, and measure latency.`,
+                answer: `A strong production approach for ${s1} separates business logic from transport layers, uses bounded caching and idempotency keys, and instruments P95 latency metrics.`
             },
             {
-                type: "System Design & Bottlenecks",
-                question: `Walk through how you would design a fault-tolerant integration between ${s1} and ${s2}, ensuring security, rate-limiting, and zero data loss under spike traffic.`,
-                keyConcepts: [s2, "rate limiting", "idempotency", "caching", "security"],
-                tip: "Cover API contracts, authentication, retry with exponential backoff, and database indexing.",
-                answer: `Use stateless JWT/OAuth2 authentication, sliding-window rate limiting, idempotent request keys, read-replicas or Redis caching for heavy reads, and circuit breakers for downstream dependencies.`
+                type: "System Design & Architecture",
+                question: `Design a fault-tolerant service for ${company} that integrates ${s1} and ${s2} under a 10x traffic spike. Where are the bottlenecks?`,
+                keyConcepts: [s2, "load balancing", "database indexing", "queue", "rate limiting"],
+                tip: "Discuss horizontal scaling, read/write separation, asynchronous queues, and graceful degradation.",
+                answer: `Introduce stateless API nodes behind a load balancer, offload heavy writes to an asynchronous worker queue, add read-through LRU/Redis caching, and enforce sliding-window rate limits.`
             },
             {
                 type: "Database & Performance",
-                question: `Suppose a critical query or data pipeline involving ${s3} slows down by 5x as data grows to 10M+ records. How do you diagnose and resolve it?`,
-                keyConcepts: [s3, "indexing", "query profiling", "pagination", "caching"],
-                tip: "Mention execution plans (EXPLAIN), compound indexes, cursor pagination, and payload projection.",
+                question: `How do you diagnose and resolve slow queries or data consistency issues when working with ${s3}?`,
+                keyConcepts: [s3, "indexing", "ACID transactions", "query plan", "pagination"],
+                tip: "Mention compound B-tree indexes (ESR rule), cursor pagination, and ACID transaction boundaries.",
                 answer: `First inspect the query execution plan to eliminate full collection/table scans, add selective compound indexes, replace offset pagination with cursor-based pagination, and project only required fields.`
             },
             {
@@ -375,39 +483,34 @@ export const evaluateInterviewAnswer = async (req, res) => {
 
         const matchedConcepts = [];
         const missingConcepts = [];
+
         (Array.isArray(keyConcepts) ? keyConcepts : []).forEach((concept) => {
             const c = String(concept).toLowerCase();
-            if (lowerAns.includes(c) || c.split(/\s+/).some((w) => w.length > 3 && lowerAns.includes(w))) {
+            if (lowerAns.includes(c) || c.split(/\s+/).some((tok) => tok.length > 3 && lowerAns.includes(tok))) {
                 matchedConcepts.push(concept);
             } else {
                 missingConcepts.push(concept);
             }
         });
 
-        const hasMetrics = /\d+%|\d+x|\d+\s*(ms|sec|users|requests|lpa|records)/i.test(cleanAns);
-        const hasStructure = /first|second|because|therefore|result|implemented|designed|optimized|ensured/i.test(cleanAns);
+        const conceptRatio = keyConcepts.length > 0 ? matchedConcepts.length / keyConcepts.length : 0.6;
+        const lengthFactor = Math.min(1, words.length / 45);
+        const hasMetrics = /\d+%|\d+x|\d+\s*(ms|sec|users|rps|mins)/i.test(cleanAns);
 
-        let technicalScore = Math.min(10, 4 + matchedConcepts.length * 1.3 + (words.length >= 35 ? 1.5 : 0));
-        let clarityScore = Math.min(10, 5 + (words.length >= 25 ? 2 : 0) + (hasStructure ? 2 : 0) + (words.length >= 55 ? 1 : 0));
-        let impactScore = Math.min(10, 4.5 + (hasMetrics ? 3 : 0) + (hasStructure ? 1.5 : 0) + (matchedConcepts.length > 0 ? 1 : 0));
+        const technicalScore = Math.max(3, Math.min(10, Math.round(conceptRatio * 7 + lengthFactor * 3)));
+        const clarityScore = Math.max(4, Math.min(10, Math.round(lengthFactor * 8 + (cleanAns.includes(".") ? 2 : 0))));
+        const impactScore = Math.max(3, Math.min(10, Math.round(lengthFactor * 6 + (hasMetrics ? 4 : 2))));
+        const overallScore = Math.round(((technicalScore + clarityScore + impactScore) / 3) * 10) / 10;
 
-        technicalScore = Number(technicalScore.toFixed(1));
-        clarityScore = Number(clarityScore.toFixed(1));
-        impactScore = Number(impactScore.toFixed(1));
-        const overallScore = Number(((technicalScore + clarityScore + impactScore) / 3).toFixed(1));
-
-        const verdictBadge =
-            overallScore >= 8
-                ? "Strong Hire Signal"
-                : overallScore >= 6.5
-                ? "Hire / Solid Response"
-                : "Needs Deeper Examples";
+        let verdictBadge = "Needs More Depth";
+        if (overallScore >= 8) verdictBadge = "Strong Hire Signal";
+        else if (overallScore >= 6.5) verdictBadge = "Solid / On Track";
 
         const strengths = [];
         const improvements = [];
 
         if (matchedConcepts.length > 0) {
-            strengths.push(`Covered core concepts: ${matchedConcepts.join(", ")}.`);
+            strengths.push(`Covered key concepts: ${matchedConcepts.join(", ")}.`);
         }
         if (hasMetrics) {
             strengths.push("Included quantifiable metrics/impact numbers.");
@@ -482,10 +585,10 @@ export const draftRecruiterCommunication = async (req, res) => {
         let body = "";
 
         if (stage === "offer_sent" || stage === "offer") {
-            subject = `🎉 Official Employment Offer Letter: ${jobTitle} at ${companyName}`;
-            body = `Dear ${candidateName},\n\nCongratulations! Following our technical and executive interview rounds, we are thrilled to extend an official Offer of Employment for the position of ${jobTitle} at ${companyName}.\n\nYour annual Total Target Compensation (CTC) will be ${finalCtc}, based out of our ${finalLocation} office, with a proposed start date of ${finalJoinDate}.\n\nWe were deeply impressed by your technical architecture skills, problem-solving depth, and cultural alignment. Please review the compensation terms in your Candidate Portal and sign digitally to confirm your acceptance.\n\nWarm regards,\nTalent Acquisition & Executive HR\n${companyName}`;
+            subject = `🎉 Official Employment Offer: ${jobTitle} at ${companyName}`;
+            body = `Dear ${candidateName},\n\nCongratulations! Following your exceptional performance across our technical and leadership interview rounds, we are thrilled to extend an Official Offer of Employment for the position of ${jobTitle} at ${companyName}.\n\n• Annual Compensation (CTC): ${finalCtc}\n• Proposed Joining Date: ${finalJoinDate}\n• Work Location: ${finalLocation}\n• Probation Period: ${offerDetails?.probationMonths || 3} Months\n\nWe are confident that your technical expertise and ownership mindset will make a significant impact on our engineering organization. Please review the formal terms and sign digitally via your Candidate Portal.\n\nWarm regards,\nTalent Acquisition & HR Leadership\n${companyName}`;
         } else if (stage === "hired" || stage === "joining") {
-            subject = `🏛️ Official Appointment & Joining Letter: ${jobTitle} at ${companyName}`;
+            subject = `🏢 Official Appointment & Joining Letter: ${jobTitle} at ${companyName}`;
             body = `Dear ${candidateName},\n\nWelcome aboard to ${companyName}! Further to your acceptance of our employment offer, we are delighted to issue your Official Appointment & Joining Letter as ${jobTitle} effective ${finalJoinDate}.\n\nPlease report at ${joiningDetails?.reportingTime || "10:00 AM"} (${joiningDetails?.workMode || "Hybrid"}) to ${joiningDetails?.reportingManager || "your Engineering Manager"} along with your verification documents. Our engineering team is excited to build with you!\n\nSincerely,\nPeople Operations & HR Leadership\n${companyName}`;
         } else if (stage === "interview_scheduled" || stage === "interview") {
             subject = `📅 Interview Invitation: ${interviewDetails?.roundName || "Technical Round"} for ${jobTitle} at ${companyName}`;

@@ -80,3 +80,34 @@ This document summarizes all bugs identified and fixed, new production-grade fea
    - Sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `X-XSS-Protection: 1; mode=block`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, and `Strict-Transport-Security`.
 5. **Bounded Payload Sizes & Health Check Endpoint**:
    - Enforced `2mb` JSON/URL-encoded body limits and added `GET /api/v1/health` for uptime monitoring.
+
+---
+
+## 5. Platform Headquarters (Admin HQ), Database Indexing & Distributed Systems Upgrades
+
+1. **Platform Headquarters (Admin HQ) Command Center (`frontend/src/components/admin/PlatformHeadquarters.jsx` & `/api/v1/system/*`)**:
+   - Accessible at `/admin/hq` and via the **Platform HQ** button in the Navbar and Recruiter Dashboard.
+   - **6 Live Executive Tabs**:
+     1. **Executive Graphs & KPIs**: Live counts of Job Seekers, Recruiters, Companies, Jobs, Applications, 7-Day Registration & Application Velocity Bar Chart, and Recruiter Skill Demand vs. Candidate Supply Gap Chart.
+     2. **8-Stage Hiring Funnel & Company Leaderboard**: Full conversion funnel (`applied` $\rightarrow$ `hired`) + top hiring companies performance table.
+     3. **Users Directory**: Searchable directory of all Job Seekers (with parsed resume status, ATS score, skills, application count) and Recruiters.
+     4. **System Design, Latency, LRU Cache & DB Indexes**: Live P50/P95/P99 HTTP latency, MongoDB `admin().ping()` latency, Read-Through LRU Cache Hit Ratio with 1-click **Flush Cache**, SSE stream count, and B-Tree/Text/TTL index inventory.
+     5. **Immutable Security Audit Log Center**: Append-only `AuditLog` viewer with Platform vs. Tenant scope, IP privacy masking, and 1-click JSON export.
+     6. **Async Background Queue & Dead-Letter Queue (DLQ)**: Exponential backoff retry metrics and 1-click **Replay Task** button.
+2. **MongoDB B-Tree (ESR), Weighted Full-Text, Unique & TTL Indexes**:
+   - `Job_ESR_Discovery_Index` (`{ location: 1, jobType: 1, createdAt: -1, experienceLevel: 1 }`) & `Job_Weighted_FullText_Index` on `Job`.
+   - `Application_Unique_Job_Applicant_Index` (`{ job: 1, applicant: 1 }, { unique: true }`) eliminating TOCTOU duplicate application race conditions.
+   - 90-day TTL index on `Notification` (`Notification_TTL_90Days_Index`) and 180-day TTL index on `AuditLog` (`AuditLog_TTL_180Days_Index`).
+3. **Read-Through $O(1)$ LRU Cache + HTTP ETag (`304 Not Modified`) (`backend/utils/lruCache.js`)**:
+   - Serves `getAllJobs` and `getJobById` in `<1ms` on cache hits (`X-Cache: HIT`) and automatically invalidates on job/application mutations.
+4. **Real-Time Server-Sent Events (SSE) Notification Multiplexer (`backend/utils/sseBroker.js`)**:
+   - Streams live notifications over `GET /api/v1/notification/stream` to `Navbar.jsx` with a 25-second heartbeat and instant toast alerts.
+5. **Multi-Tenant IDOR Protection & Candidate Privacy Projection**:
+   - Verified company ownership (`Company.findOne({ _id: companyId, userId: req.id })`) on `postJob` and `updateJob`, escaped HTML in `mailer.js`, and restricted public `getJobById` application population to non-sensitive fields (`_id applicant status hiringStage createdAt`).
+
+---
+
+## 9. [2026-11-05] ESM Export Fix for `dbEngine.js`
+- **Issue**: `SyntaxError: The requested module '../utils/dbEngine.js' does not provide an export named 'computeJobAnalyticsFacet'` when starting `backend/index.js`.
+- **Root Cause**: `backend/controllers/system.controller.js` imported `computeJobAnalyticsFacet` and `computeRecruiterPipelineFacet`, while `backend/utils/dbEngine.js` only exported `computeJobAnalytics` and `computeRecruiterPipelineAnalytics`.
+- **Resolution**: Added named exports `computeJobAnalyticsFacet` and `computeRecruiterPipelineFacet` in `backend/utils/dbEngine.js` alongside the existing exports.

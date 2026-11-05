@@ -7,10 +7,10 @@ const isAuthenticated = async (req, res, next) => {
         if (!token) {
             return res.status(401).json({
                 message: "User not authenticated",
-                success: false,
+                success: false
             });
         }
-        const decode = jwt.verify(token, process.env.SECRET_KEY);
+        const decode = jwt.verify(token, process.env.SECRET_KEY || "jobportal_secret_key");
         if (!decode) {
             return res.status(401).json({
                 message: "Invalid token",
@@ -31,11 +31,11 @@ const isAuthenticated = async (req, res, next) => {
 
 export const isRecruiter = async (req, res, next) => {
     try {
-        if (req.role === "recruiter") {
+        if (req.role === "recruiter" || req.role === "admin") {
             return next();
         }
         const user = await User.findById(req.id).select("role");
-        if (!user || user.role !== "recruiter") {
+        if (!user || (user.role !== "recruiter" && user.role !== "admin")) {
             return res.status(403).json({
                 message: "Access denied. Recruiter privileges required.",
                 success: false

@@ -13,34 +13,36 @@ This document provides a technical deep-dive into the architecture of **JobPorta
 │  • Real-Time Client Matchmaking Engine (src/utils/matchmaking.js)          │
 │  • Isolated A4 Vector Print Window Engine (src/utils/printDocument.js)     │
 │  • Web Speech API Voice/Text Mock Interviewer (SpeechSynthesis + STT)      │
+│  • Platform Headquarters (Admin HQ) Command Center (/admin/hq)             │
 └───────────────────────────────────────┬────────────────────────────────────┘
-                                        │ REST API (Axios + httpOnly JWT Cookie)
+                                        │ REST API + Real-Time SSE Stream
                                         ▼
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                    SECURITY & MIDDLEWARE LAYER (Express)                   │
 │  • Custom Security Headers (CSP, HSTS, X-Frame-Options, Referrer-Policy)   │
 │  • Recursive NoSQL Injection ($gt/$ne/$where) & Prototype Pollution Guard  │
-│  • Sliding-Window IP Rate Limiters (Login, Signup, API, AI Endpoints)      │
-│  • Role-Based Access Control (isAuthenticated + isRecruiter Middlewares)   │
+│  • Sliding-Window IP Rate Limiters + P50/P95/P99 Latency Telemetry         │
+│  • Idempotency-Key Middleware + RBAC (isAuthenticated + isRecruiter)       │
 └───────────────────────────────────────┬────────────────────────────────────┘
                                         │
         ┌───────────────────────────────┼───────────────────────────────┐
         ▼                               ▼                               ▼
 ┌──────────────────────┐   ┌─────────────────────────┐   ┌──────────────────────┐
 │  RESUME PARSER &     │   │   HYBRID AI ENGINE      │   │  HIRING PIPELINE &   │
-│  STORAGE ENGINE      │   │  (Google Gemini 2.5 +   │   │  NOTIFICATION ENGINE │
+│  STORAGE ENGINE      │   │  (Google Gemini 2.5 +   │   │  REAL-TIME ENGINE    │
 │  • Native PDF & DOCX │   │   Deterministic Local   │   │  • 8-Stage Kanban    │
-│    Binary Extractor  │   │   Fallback Generators)  │   │  • Nodemailer HTML   │
-│  • 120+ Skill Lexicon│   │  • ATS Score & Bullets  │   │    Email + Audit Log │
-│  • Cloudinary +      │   │  • 10-Pt Rubric Grader  │   │  • In-App Bell Alerts│
-│    DataURI Fallback  │   │  • HR Letter Drafter    │   │  • Google Calendar   │
+│    Binary Extractor  │   │   Fallback Generators)  │   │  • SSE Pub/Sub Broker│
+│  • 120+ Skill Lexicon│   │  • ATS Score & Bullets  │   │  • Async Retry Queue │
+│  • Cloudinary +      │   │  • 10-Pt Rubric Grader  │   │    + Dead-Letter DLQ │
+│    DataURI Fallback  │   │  • HR Letter Drafter    │   │  • O(1) LRU Cache    │
 └──────────┬───────────┘   └────────────┬────────────┘   └──────────┬───────────┘
            └────────────────────────────┼───────────────────────────┘
                                         ▼
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                         DATABASE LAYER (MongoDB)                           │
-│   Users (Portfolio + Parsed Resume) • Companies • Jobs • Applications      │
-│   (Multi-Stage + Offer/Joining Letters + Email Logs) • Notifications       │
+│   Users • Companies • Jobs (ESR B-Tree + Weighted Text Index) •            │
+│   Applications (Unique Compound Index) • Notifications (90d TTL) •         │
+│   AuditLogs (Immutable Append-Only + 180d TTL)                             │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -116,3 +118,23 @@ This document provides a technical deep-dive into the architecture of **JobPorta
   - Built `backend/middlewares/security.js` with a recursive NoSQL key sanitizer that strips `$` operators, `.` path traversal keys, and `__proto__`/`constructor` keys while preserving valid nested arrays.
   - Enabled `mongoose.set("sanitizeFilter", true)` and `mongoose.set("strictQuery", true)` globally in `backend/utils/db.js`.
   - Added sliding-window rate limiters (`loginRateLimiter`, `signupRateLimiter`, `aiRateLimiter`, `apiRateLimiter`) that automatically clean up expired IP buckets.
+
+---
+
+## 4. Database Indexing, Caching, Concurrency & Platform Headquarters Architecture
+
+### Challenge 7: Eliminating MongoDB `COLLSCAN` & Preventing Race-Condition Double Applications
+- **The Problem**:
+  1. Filtering jobs by `location` and `jobType` while sorting by `createdAt` and filtering by `experienceLevel` causes a full collection scan (`COLLSCAN`) and an in-memory sort if unindexed.
+  2. Under concurrent requests (e.g., double-clicking "Apply Now"), two parallel requests can both pass `Application.findOne({ job, applicant })` before either writes (a classic Time-of-Check to Time-of-Use / TOCTOU race condition).
+- **Our Solution**:
+  - **ESR Compound B-Tree Index (`backend/models/job.model.js`)**: Created `Job_ESR_Discovery_Index` following the **Equality (`location`, `jobType`) $\rightarrow$ Sort (`createdAt: -1`) $\rightarrow$ Range (`experienceLevel: 1`)** rule, plus `Job_Weighted_FullText_Index` (`title: 10`, `requirements: 8`, `location: 5`, `description: 3`).
+  - **Storage-Engine Unique Compound Index (`backend/models/application.model.js`)**: Added `Application_Unique_Job_Applicant_Index` (`{ job: 1, applicant: 1 }, { unique: true }`) and handled MongoDB error `11000` cleanly.
+  - **ACID Transactions with Standalone Fallback (`backend/utils/dbEngine.js`)**: `withAcidTransaction()` wraps multi-document mutations in a Mongoose `ClientSession` transaction and automatically falls back when running on a local standalone MongoDB instance without a replica set.
+
+### Challenge 8: Sub-Millisecond Job Reads & Real-Time Push Notifications Without Polling
+- **The Problem**: Repeatedly querying and populating `Job` documents on every page navigation adds unnecessary database load, while polling `/notification/get` every few seconds wastes bandwidth.
+- **Our Solution**:
+  - **Read-Through $O(1)$ LRU Cache + HTTP ETag (`backend/utils/lruCache.js`)**: Caches job queries in an insertion-ordered `Map` with SHA-1 weak `ETag` (`304 Not Modified`) support and automatic prefix invalidation (`jobCache.invalidateByPrefix("jobs:")`) whenever jobs or applications change.
+  - **Real-Time SSE Multiplexer (`backend/utils/sseBroker.js`)**: `GET /api/v1/notification/stream` pushes new hiring stage notifications to `Navbar.jsx` in `<10ms` over a persistent HTTP connection with a 25-second keep-alive heartbeat.
+  - **Producer-Consumer Background Retry Queue & DLQ (`backend/utils/backgroundQueue.js`)**: Retries failed SMTP email dispatches with exponential backoff + jitter (`baseDelay * 2^attempt + jitter`) and stores exhausted tasks in a Dead-Letter Queue (DLQ) for 1-click replay from Platform HQ (`/admin/hq`).

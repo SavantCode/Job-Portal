@@ -2,7 +2,10 @@ import React, { useEffect, useState } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Button } from '../ui/button'
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
-import { LogOut, User2, ChevronDown, Bell, CheckCircle2, XCircle, Sparkles, Calendar, Award, ClipboardList, Sun, Moon, Menu, X } from 'lucide-react'
+import {
+    LogOut, User2, ChevronDown, Bell, CheckCircle2, XCircle,
+    Sparkles, Calendar, Award, ClipboardList, Sun, Moon, Menu, X, ShieldAlert
+} from 'lucide-react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useDispatch, useSelector } from 'react-redux'
 import axios from 'axios'
@@ -11,7 +14,12 @@ import { setUser } from '@/redux/authSlice'
 import { setAllAppliedJobs, setAllAdminJobs, setSingleJob, resetJobFilters } from '@/redux/jobSlice'
 import { setCompanies, setSingleCompany, setSearchCompanyByText } from '@/redux/companySlice'
 import { setAllApplicants } from '@/redux/applicationSlice'
-import { setNotifications, markAllReadInStore, clearNotificationsInStore } from '@/redux/notificationSlice'
+import {
+    setNotifications,
+    prependNotificationInStore,
+    markAllReadInStore,
+    clearNotificationsInStore
+} from '@/redux/notificationSlice'
 import { toast } from 'sonner'
 
 const Navbar = () => {
@@ -51,27 +59,57 @@ const Navbar = () => {
         setIsDark(prev => !prev);
     };
 
-    // Fetch latest applied jobs & persistent notifications for logged-in user
+    // Fetch initial notifications & connect Real-Time Server-Sent Events (SSE) stream
     useEffect(() => {
-        if (user) {
-            if (user.role === 'student') {
-                axios.get(`${APPLICATION_API_END_POINT}/get`, { withCredentials: true })
-                    .then(res => {
-                        if (res.data.success) {
-                            dispatch(setAllAppliedJobs(res.data.application));
-                        }
-                    })
-                    .catch(() => {});
-            }
+        if (!user?._id) return;
 
-            axios.get(`${NOTIFICATION_API_END_POINT}/get`, { withCredentials: true })
+        if (user.role === 'student') {
+            axios.get(`${APPLICATION_API_END_POINT}/get`, { withCredentials: true })
                 .then(res => {
                     if (res.data.success) {
-                        dispatch(setNotifications(res.data.notifications));
+                        dispatch(setAllAppliedJobs(res.data.application));
                     }
                 })
                 .catch(() => {});
         }
+
+        axios.get(`${NOTIFICATION_API_END_POINT}/get`, { withCredentials: true })
+            .then(res => {
+                if (res.data.success) {
+                    dispatch(setNotifications(res.data.notifications));
+                }
+            })
+            .catch(() => {});
+
+        // Connect Real-Time SSE Notification Stream
+        let eventSource = null;
+        try {
+            eventSource = new EventSource(`${NOTIFICATION_API_END_POINT}/stream`, {
+                withCredentials: true
+            });
+
+            eventSource.addEventListener("notification", (event) => {
+                try {
+                    const incoming = JSON.parse(event.data);
+                    if (incoming && incoming._id) {
+                        dispatch(prependNotificationInStore(incoming));
+                        toast.info(incoming.title || "New Hiring Update", {
+                            description: incoming.message || "Check your notification center for details."
+                        });
+                    }
+                } catch {
+                    // ignore malformed frame
+                }
+            });
+        } catch {
+            // EventSource fallback handled gracefully
+        }
+
+        return () => {
+            if (eventSource) {
+                eventSource.close();
+            }
+        };
     }, [user?._id, user?.role, dispatch]);
 
     const unreadCount = notifications.filter(n => !n.isRead).length;
@@ -165,6 +203,19 @@ const Navbar = () => {
                                         </li>
                                         <li>
                                             <Link
+                                                to="/admin/hq"
+                                                className={`px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 ${
+                                                    isActiveLink('/admin/hq')
+                                                        ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                                        : 'hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-slate-800/60'
+                                                }`}
+                                            >
+                                                <ShieldAlert className='w-3.5 h-3.5 text-[#F83002]' />
+                                                <span>Platform HQ</span>
+                                            </Link>
+                                        </li>
+                                        <li>
+                                            <Link
                                                 to="/notifications"
                                                 className={`px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 ${
                                                     isActiveLink('/notifications')
@@ -232,24 +283,39 @@ const Navbar = () => {
                                                 <span>AI Cover Letter</span>
                                             </Link>
                                         </li>
-                                        {user && user.role === 'student' && (
-                                            <li>
-                                                <Link
-                                                    to="/notifications"
-                                                    className={`px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 ${
-                                                        isActiveLink('/notifications')
-                                                            ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
-                                                            : 'hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-slate-800/60'
-                                                    }`}
-                                                >
-                                                    <span>Notifications</span>
-                                                    {unreadCount > 0 && (
-                                                        <span className='px-1.5 py-0.5 rounded-full bg-[#F83002] text-white text-[10px] font-bold'>
-                                                            {unreadCount}
-                                                        </span>
-                                                    )}
-                                                </Link>
-                                            </li>
+                                        {user && (
+                                            <>
+                                                <li>
+                                                    <Link
+                                                        to="/notifications"
+                                                        className={`px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 ${
+                                                            isActiveLink('/notifications')
+                                                                ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                                                : 'hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-slate-800/60'
+                                                        }`}
+                                                    >
+                                                        <span>Notifications</span>
+                                                        {unreadCount > 0 && (
+                                                            <span className='px-1.5 py-0.5 rounded-full bg-[#F83002] text-white text-[10px] font-bold'>
+                                                                {unreadCount}
+                                                            </span>
+                                                        )}
+                                                    </Link>
+                                                </li>
+                                                <li>
+                                                    <Link
+                                                        to="/admin/hq"
+                                                        className={`px-3 py-2 rounded-xl transition-colors flex items-center gap-1.5 ${
+                                                            isActiveLink('/admin/hq')
+                                                                ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                                                : 'hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-slate-800/60'
+                                                        }`}
+                                                    >
+                                                        <ShieldAlert className='w-3.5 h-3.5 text-[#F83002]' />
+                                                        <span>HQ</span>
+                                                    </Link>
+                                                </li>
+                                            </>
                                         )}
                                     </>
                                 )
@@ -298,7 +364,10 @@ const Navbar = () => {
                             <PopoverContent className="w-80 p-0 shadow-xl rounded-2xl border-gray-100 dark:border-slate-800 overflow-hidden" align="end">
                                 <div className="px-4 py-3 bg-purple-50/70 dark:bg-slate-800/80 border-b border-purple-100 dark:border-slate-700 flex items-center justify-between">
                                     <div>
-                                        <h4 className="font-bold text-sm text-gray-900 dark:text-white">Hiring & Letter Alerts</h4>
+                                        <div className="flex items-center gap-1.5">
+                                            <h4 className="font-bold text-sm text-gray-900 dark:text-white">Live SSE Alerts</h4>
+                                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Real-Time SSE Stream Active" />
+                                        </div>
                                         <p className="text-[11px] text-gray-500 dark:text-slate-400">Real-time pipeline & letter updates</p>
                                     </div>
                                     <Link to="/notifications" className="text-xs font-semibold text-[#6A38C2] dark:text-purple-400 hover:underline">
@@ -379,7 +448,6 @@ const Navbar = () => {
                                 </PopoverTrigger>
                                 <PopoverContent className="w-80 p-4 shadow-xl rounded-2xl border-gray-100 dark:border-slate-800" align="end">
                                     <div className='space-y-4'>
-                                        {/* User Info Header */}
                                         <div className='flex items-start gap-3.5 pb-3 border-b border-gray-100 dark:border-slate-800'>
                                             <Avatar className="h-11 w-11 shrink-0 ring-2 ring-purple-100 dark:ring-purple-900">
                                                 <AvatarImage
@@ -399,7 +467,6 @@ const Navbar = () => {
                                             </div>
                                         </div>
 
-                                        {/* Menu Actions */}
                                         <div className='flex flex-col gap-1 text-gray-700 dark:text-slate-200'>
                                             <Link
                                                 to="/profile"
@@ -407,6 +474,13 @@ const Navbar = () => {
                                             >
                                                 <User2 className='h-4 w-4 text-gray-500 dark:text-slate-400' />
                                                 <span>{user?.role === 'recruiter' ? 'Recruiter Profile' : 'View Profile & Applied Jobs'}</span>
+                                            </Link>
+                                            <Link
+                                                to="/admin/hq"
+                                                className='flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-purple-50 dark:hover:bg-slate-800 transition-colors text-sm font-semibold text-[#6A38C2] dark:text-purple-400'
+                                            >
+                                                <ShieldAlert className='h-4 w-4 text-[#F83002]' />
+                                                <span>Platform Headquarters (HQ)</span>
                                             </Link>
                                             <Link
                                                 to="/notifications"
@@ -456,6 +530,16 @@ const Navbar = () => {
                                 }`}
                             >
                                 Jobs & Analytics
+                            </Link>
+                            <Link
+                                to="/admin/hq"
+                                className={`block px-3.5 py-2.5 rounded-xl text-sm font-semibold ${
+                                    isActiveLink('/admin/hq')
+                                        ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300'
+                                        : 'text-[#6A38C2] dark:text-purple-400 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                }`}
+                            >
+                                Platform Headquarters (HQ)
                             </Link>
                             <Link
                                 to="/notifications"
@@ -516,22 +600,30 @@ const Navbar = () => {
                                 <Sparkles className='w-4 h-4 text-[#6A38C2] dark:text-purple-400' />
                                 <span>AI Cover Letter</span>
                             </Link>
-                            {user && user.role === 'student' && (
-                                <Link
-                                    to="/notifications"
-                                    className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium ${
-                                        isActiveLink('/notifications')
-                                            ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
-                                            : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
-                                    }`}
-                                >
-                                    <span>Notifications</span>
-                                    {unreadCount > 0 && (
-                                        <span className='px-2 py-0.5 rounded-full bg-[#F83002] text-white text-[10px] font-bold'>
-                                            {unreadCount}
-                                        </span>
-                                    )}
-                                </Link>
+                            {user && (
+                                <>
+                                    <Link
+                                        to="/admin/hq"
+                                        className='block px-3.5 py-2.5 rounded-xl text-sm font-semibold text-[#6A38C2] dark:text-purple-400 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                    >
+                                        Platform Headquarters (HQ)
+                                    </Link>
+                                    <Link
+                                        to="/notifications"
+                                        className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium ${
+                                            isActiveLink('/notifications')
+                                                ? 'bg-purple-50 dark:bg-purple-950/60 text-[#6A38C2] dark:text-purple-300 font-semibold'
+                                                : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                        }`}
+                                    >
+                                        <span>Notifications</span>
+                                        {unreadCount > 0 && (
+                                            <span className='px-2 py-0.5 rounded-full bg-[#F83002] text-white text-[10px] font-bold'>
+                                                {unreadCount}
+                                            </span>
+                                        )}
+                                    </Link>
+                                </>
                             )}
                         </>
                     )}
