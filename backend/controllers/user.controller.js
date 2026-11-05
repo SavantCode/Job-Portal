@@ -4,31 +4,33 @@ import jwt from "jsonwebtoken";
 import getDataUri from "../utils/datauri.js";
 import cloudinary from "../utils/cloudinary.js";
 import { parseResumeFile, analyzeResumeText } from "../utils/resumeParser.js";
+import { logAuditEvent } from "../models/auditLog.model.js";
 
 const hasValidCloudinaryConfig = () => {
     const { CLOUD_NAME, API_KEY, API_SECRET } = process.env;
-    return Boolean(
-        CLOUD_NAME &&
-            API_KEY &&
-            API_SECRET &&
-            !CLOUD_NAME.includes("your_") &&
-            !API_KEY.includes("your_")
-    );
+    if (!CLOUD_NAME || !API_KEY || !API_SECRET) return false;
+    if (
+        CLOUD_NAME.includes("your_") ||
+        API_KEY.includes("your_") ||
+        API_SECRET.includes("your_")
+    ) {
+        return false;
+    }
+    return true;
 };
 
-const sanitizeUserPayload = (userDoc) => {
-    if (!userDoc) return null;
-    return {
-        _id: userDoc._id,
-        fullname: userDoc.fullname,
-        email: userDoc.email,
-        phoneNumber: userDoc.phoneNumber,
-        role: userDoc.role,
-        profile: userDoc.profile,
-        savedJobs: userDoc.savedJobs || [],
-        createdAt: userDoc.createdAt
-    };
-};
+/**
+ * Strips password hash and formats user object for safe frontend Redux storage
+ */
+const sanitizeUserPayload = (user) => ({
+    _id: user._id,
+    fullname: user.fullname,
+    email: user.email,
+    phoneNumber: user.phoneNumber,
+    role: user.role,
+    profile: user.profile,
+    savedJobs: user.savedJobs || []
+});
 
 export const register = async (req, res) => {
     try {
@@ -41,51 +43,38 @@ export const register = async (req, res) => {
             });
         }
 
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(String(email).trim())) {
-            return res.status(400).json({
-                message: "Please provide a valid email address.",
-                success: false
-            });
-        }
-
-        if (String(password).length < 6) {
-            return res.status(400).json({
-                message: "Password must be at least 6 characters long.",
-                success: false
-            });
-        }
-
         const normalizedEmail = String(email).toLowerCase().trim();
         const existingUser = await User.findOne({ email: normalizedEmail });
         if (existingUser) {
             return res.status(400).json({
-                message: "An account already exists with this email.",
+                message: "User already exists with this email.",
                 success: false
             });
         }
 
-        let profilePhotoUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(fullname.trim())}`;
+        let profilePhotoUrl = "";
         const file = req.file;
+
         if (file) {
-            try {
-                const fileUri = getDataUri(file);
-                if (hasValidCloudinaryConfig()) {
-                    const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
-                        resource_type: "auto"
-                    });
+            const fileUri = getDataUri(file);
+            if (hasValidCloudinaryConfig()) {
+                try {
+                    const cloudResponse = await cloudinary.uploader.upload(fileUri.content);
                     profilePhotoUrl = cloudResponse.secure_url;
-                } else if (file.mimetype?.startsWith("image/") && file.size <= 2 * 1024 * 1024) {
-                    profilePhotoUrl = fileUri.content;
+                } catch (uploadErr) {
+                    console.warn("Cloudinary upload skipped, using inline data URI fallback:", uploadErr.message);
+                    if (file.size <= 2 * 1024 * 1024) {
+                        profilePhotoUrl = fileUri.content;
+                    }
                 }
-            } catch (uploadError) {
-                console.log("Avatar upload fallback used:", uploadError.message);
+            } else if (file.size <= 2 * 1024 * 1024) {
+                profilePhotoUrl = fileUri.content;
             }
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        await User.create({
+        const createdUser = await User.create({
             fullname: fullname.trim(),
             email: normalizedEmail,
             phoneNumber: String(phoneNumber).trim(),
@@ -94,6 +83,19 @@ export const register = async (req, res) => {
             profile: {
                 profilePhoto: profilePhotoUrl
             }
+        });
+
+        logAuditEvent({
+            req,
+            actorId: createdUser._id,
+            actorName: createdUser.fullname,
+            actorEmail: createdUser.email,
+            actorRole: createdUser.role,
+            action: "USER_REGISTERED",
+            entityType: "User",
+            entityId: createdUser._id,
+            status: "SUCCESS",
+            metadata: { role: createdUser.role }
         });
 
         return res.status(201).json({
@@ -123,14 +125,34 @@ export const login = async (req, res) => {
         const normalizedEmail = String(email).toLowerCase().trim();
         let user = await User.findOne({ email: normalizedEmail });
         if (!user) {
+            logAuditEvent({
+                req,
+                actorEmail: normalizedEmail,
+                actorRole: role,
+                action: "USER_LOGIN_FAILED",
+                entityType: "Security",
+                status: "FAILURE",
+                metadata: { reason: "Account not found" }
+            });
             return res.status(400).json({
                 message: "Incorrect email or password.",
                 success: false
             });
         }
 
-        const isPasswordMatch = await bcrypt.compare(String(password), user.password);
+        const isPasswordMatch = await bcrypt.compare(password, user.password);
         if (!isPasswordMatch) {
+            logAuditEvent({
+                req,
+                actorId: user._id,
+                actorName: user.fullname,
+                actorEmail: user.email,
+                actorRole: user.role,
+                action: "USER_LOGIN_FAILED",
+                entityType: "Security",
+                status: "FAILURE",
+                metadata: { reason: "Invalid password" }
+            });
             return res.status(400).json({
                 message: "Incorrect email or password.",
                 success: false
@@ -145,10 +167,23 @@ export const login = async (req, res) => {
         }
 
         const tokenData = {
-            userId: user._id
+            userId: user._id,
+            role: user.role
         };
         const token = jwt.sign(tokenData, process.env.SECRET_KEY || "jobportal_secret_key", {
             expiresIn: "1d"
+        });
+
+        logAuditEvent({
+            req,
+            actorId: user._id,
+            actorName: user.fullname,
+            actorEmail: user.email,
+            actorRole: user.role,
+            action: "USER_LOGIN_SUCCESS",
+            entityType: "User",
+            entityId: user._id,
+            status: "SUCCESS"
         });
 
         return res
@@ -265,7 +300,6 @@ export const updateProfile = async (req, res) => {
             user.profile.profilePhoto = profilePhotoUrl.trim();
         }
 
-        // Parse structured JSON fields if sent via FormData or JSON
         const parseJsonField = (val) => {
             if (!val) return null;
             if (typeof val === "object") return val;
@@ -329,7 +363,6 @@ export const updateProfile = async (req, res) => {
             };
         }
 
-        // If user manually edited or pasted resume text
         if (parsedResumeText !== undefined && !req.file) {
             const analysis = analyzeResumeText(parsedResumeText, user.profile.resumeOriginalName || "Resume.txt");
             user.profile.parsedResumeText = analysis.parsedText;
@@ -338,7 +371,6 @@ export const updateProfile = async (req, res) => {
             user.profile.resumeParsedAt = new Date();
         }
 
-        // Handle File Upload (PDF, Word .docx/.doc, or Profile Photo)
         const file = req.file;
         let resumeParseResult = null;
 
@@ -362,7 +394,6 @@ export const updateProfile = async (req, res) => {
                     user.profile.profilePhoto = fileUri.content;
                 }
             } else {
-                // Resume File (.pdf, .docx, .doc, .txt) -> Parse Resume & Store for Convenient Viewing
                 resumeParseResult = parseResumeFile(file);
                 user.profile.resumeOriginalName = file.originalname;
                 user.profile.resumeMimeType = file.mimetype || "application/pdf";
@@ -371,7 +402,6 @@ export const updateProfile = async (req, res) => {
                 user.profile.resumeAtsScore = resumeParseResult.atsReadinessScore;
                 user.profile.resumeParsedAt = resumeParseResult.parsedAt;
 
-                // Automatically merge newly discovered skills from the resume into the user's skill list
                 if (autoMergeResumeSkills !== "false" && resumeParseResult.extractedSkills.length > 0) {
                     const existingSkillsLower = new Set(
                         (user.profile.skills || []).map((s) => s.toLowerCase())
@@ -386,7 +416,6 @@ export const updateProfile = async (req, res) => {
                     user.profile.skills = mergedSkills;
                 }
 
-                // Auto-fill social links if empty and detected in resume
                 if (resumeParseResult.detectedLinks?.github && !user.profile.socialLinks?.github) {
                     user.profile.socialLinks = {
                         ...(user.profile.socialLinks || {}),
@@ -406,7 +435,6 @@ export const updateProfile = async (req, res) => {
                     user.profile.experienceYears = resumeParseResult.estimatedExperienceYears;
                 }
 
-                // Upload to Cloudinary if configured, or store data URI for instant in-browser viewing
                 if (hasValidCloudinaryConfig()) {
                     try {
                         const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
@@ -428,6 +456,21 @@ export const updateProfile = async (req, res) => {
 
         await user.save();
 
+        logAuditEvent({
+            req,
+            actorId: user._id,
+            actorName: user.fullname,
+            actorEmail: user.email,
+            actorRole: user.role,
+            action: resumeParseResult ? "RESUME_PARSED_AND_UPDATED" : "PROFILE_UPDATED",
+            entityType: "User",
+            entityId: user._id,
+            status: "SUCCESS",
+            metadata: resumeParseResult
+                ? { extractedSkillsCount: resumeParseResult.extractedSkills.length, atsScore: resumeParseResult.atsReadinessScore }
+                : {}
+        });
+
         return res.status(200).json({
             message: resumeParseResult
                 ? `Profile updated & Resume parsed (${resumeParseResult.extractedSkills.length} skills extracted for matchmaking)!`
@@ -445,9 +488,6 @@ export const updateProfile = async (req, res) => {
     }
 };
 
-/**
- * Dedicated endpoint to parse a PDF/Word resume and immediately sync skills for matchmaking
- */
 export const parseAndSaveResume = async (req, res) => {
     try {
         const userId = req.id;
@@ -493,7 +533,6 @@ export const parseAndSaveResume = async (req, res) => {
         user.profile.resumeAtsScore = analysis.atsReadinessScore;
         user.profile.resumeParsedAt = analysis.parsedAt;
 
-        // Merge extracted skills into profile.skills
         const existingLower = new Set((user.profile.skills || []).map((s) => s.toLowerCase()));
         const merged = [...(user.profile.skills || [])];
         for (const sk of analysis.extractedSkills) {

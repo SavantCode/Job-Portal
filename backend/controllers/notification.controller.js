@@ -1,4 +1,13 @@
 import { Notification } from "../models/notification.model.js";
+import sseBroker from "../utils/sseBroker.js";
+
+/**
+ * Real-Time Server-Sent Events (SSE) Stream Endpoint
+ * GET /api/v1/notification/stream
+ */
+export const streamNotifications = (req, res) => {
+    sseBroker.subscribe(req.id, req, res);
+};
 
 export const getUserNotifications = async (req, res) => {
     try {

@@ -1,6 +1,18 @@
 import nodemailer from "nodemailer";
+import backgroundQueue from "./backgroundQueue.js";
 
 let cachedEtherealAccount = null;
+
+/**
+ * Escapes HTML special characters to prevent HTML/XSS injection in email clients
+ */
+const escapeHtml = (str = "") =>
+    String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
 
 /**
  * Resolves a Nodemailer transporter:
@@ -97,7 +109,7 @@ export const generateICSInvite = ({
 };
 
 /**
- * Builds a responsive Enterprise HTML Email Template for all hiring stages
+ * Builds a responsive, HTML-escaped Enterprise Email Template for all hiring stages
  */
 export const buildEnterpriseEmailHTML = ({
     companyName = "Enterprise Partner",
@@ -114,9 +126,19 @@ export const buildEnterpriseEmailHTML = ({
     recruiterName = "Talent Acquisition Team",
     recruiterEmail = ""
 }) => {
+    const safeCompanyName = escapeHtml(companyName);
+    const safeBadgeText = escapeHtml(badgeText);
+    const safeSubject = escapeHtml(subject);
+    const safeRecruiterName = escapeHtml(recruiterName);
+    const safeRecruiterEmail = escapeHtml(recruiterEmail);
+
     const formattedBody = (bodyText || "")
         .split("\n")
-        .map(line => line.trim() ? `<p style="margin:0 0 12px 0;color:#334155;font-size:15px;line-height:1.65;">${line}</p>` : `<br/>`)
+        .map((line) =>
+            line.trim()
+                ? `<p style="margin:0 0 12px 0;color:#334155;font-size:15px;line-height:1.65;">${escapeHtml(line)}</p>`
+                : `<br/>`
+        )
         .join("");
 
     let extraCardHTML = "";
@@ -125,16 +147,16 @@ export const buildEnterpriseEmailHTML = ({
         extraCardHTML = `
             <div style="margin:24px 0;padding:20px;border-radius:14px;background:#F5F3FF;border:1px solid #DDD6FE;">
                 <div style="font-size:12px;font-weight:700;text-transform:uppercase;color:#6A38C2;letter-spacing:0.06em;margin-bottom:10px;">
-                    📅 Scheduled Interview Details (${interviewDetails.roundName || `Round ${interviewDetails.roundNumber || 1}`})
+                    📅 Scheduled Interview Details (${escapeHtml(interviewDetails.roundName || `Round ${interviewDetails.roundNumber || 1}`)})
                 </div>
                 <table style="width:100%;font-size:14px;color:#1E293B;border-collapse:collapse;">
-                    <tr><td style="padding:4px 0;color:#64748B;width:130px;">Date & Time:</td><td style="padding:4px 0;font-weight:600;">${interviewDetails.date} at ${interviewDetails.time || "TBD"} (${interviewDetails.duration || 45} mins)</td></tr>
-                    <tr><td style="padding:4px 0;color:#64748B;">Interview Mode:</td><td style="padding:4px 0;font-weight:600;">${interviewDetails.mode || "Video Call"}</td></tr>
-                    ${interviewDetails.notes ? `<tr><td style="padding:4px 0;color:#64748B;">Prep Notes:</td><td style="padding:4px 0;">${interviewDetails.notes}</td></tr>` : ""}
+                    <tr><td style="padding:4px 0;color:#64748B;width:130px;">Date & Time:</td><td style="padding:4px 0;font-weight:600;">${escapeHtml(interviewDetails.date)} at ${escapeHtml(interviewDetails.time || "TBD")} (${escapeHtml(interviewDetails.duration || 45)} mins)</td></tr>
+                    <tr><td style="padding:4px 0;color:#64748B;">Interview Mode:</td><td style="padding:4px 0;font-weight:600;">${escapeHtml(interviewDetails.mode || "Video Call")}</td></tr>
+                    ${interviewDetails.notes ? `<tr><td style="padding:4px 0;color:#64748B;">Prep Notes:</td><td style="padding:4px 0;">${escapeHtml(interviewDetails.notes)}</td></tr>` : ""}
                 </table>
                 ${interviewDetails.meetingLink ? `
                     <div style="margin-top:16px;">
-                        <a href="${interviewDetails.meetingLink}" target="_blank" style="display:inline-block;padding:11px 22px;background:#6A38C2;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;">
+                        <a href="${escapeHtml(interviewDetails.meetingLink)}" target="_blank" style="display:inline-block;padding:11px 22px;background:#6A38C2;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;">
                             Join Live Interview Meeting →
                         </a>
                     </div>
@@ -150,12 +172,12 @@ export const buildEnterpriseEmailHTML = ({
                 <div style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1D4ED8;letter-spacing:0.06em;margin-bottom:10px;">
                     📝 Technical Assignment Brief
                 </div>
-                <div style="font-size:16px;font-weight:700;color:#1E293B;margin-bottom:6px;">${assignmentDetails.title}</div>
-                <div style="font-size:14px;color:#334155;margin-bottom:10px;white-space:pre-line;">${assignmentDetails.instructions || ""}</div>
-                <div style="font-size:13px;color:#475569;"><strong>Submission Deadline:</strong> ${assignmentDetails.deadline || "Within 48 hours"}</div>
+                <div style="font-size:16px;font-weight:700;color:#1E293B;margin-bottom:6px;">${escapeHtml(assignmentDetails.title)}</div>
+                <div style="font-size:14px;color:#334155;margin-bottom:10px;white-space:pre-line;">${escapeHtml(assignmentDetails.instructions || "")}</div>
+                <div style="font-size:13px;color:#475569;"><strong>Submission Deadline:</strong> ${escapeHtml(assignmentDetails.deadline || "Within 48 hours")}</div>
                 ${assignmentDetails.referenceLink ? `
                     <div style="margin-top:14px;">
-                        <a href="${assignmentDetails.referenceLink}" target="_blank" style="display:inline-block;padding:10px 20px;background:#2563EB;color:#ffffff;text-decoration:none;font-weight:600;font-size:13px;border-radius:10px;">
+                        <a href="${escapeHtml(assignmentDetails.referenceLink)}" target="_blank" style="display:inline-block;padding:10px 20px;background:#2563EB;color:#ffffff;text-decoration:none;font-weight:600;font-size:13px;border-radius:10px;">
                             Open Assignment Brief / Starter Repo →
                         </a>
                     </div>
@@ -169,11 +191,11 @@ export const buildEnterpriseEmailHTML = ({
                     🎉 Official Offer Summary
                 </div>
                 <table style="width:100%;font-size:14px;color:#1E293B;border-collapse:collapse;">
-                    <tr><td style="padding:4px 0;color:#065F46;width:150px;">Offered Compensation:</td><td style="padding:4px 0;font-weight:700;">${offerDetails.ctc}</td></tr>
-                    <tr><td style="padding:4px 0;color:#065F46;">Proposed Joining Date:</td><td style="padding:4px 0;font-weight:600;">${offerDetails.joiningDate || "Immediate / Flexible"}</td></tr>
-                    <tr><td style="padding:4px 0;color:#065F46;">Work Location:</td><td style="padding:4px 0;font-weight:600;">${offerDetails.location || "Company HQ"}</td></tr>
-                    <tr><td style="padding:4px 0;color:#065F46;">Probation Period:</td><td style="padding:4px 0;">${offerDetails.probationMonths || 3} Months</td></tr>
-                    ${offerDetails.benefits ? `<tr><td style="padding:4px 0;color:#065F46;">Perks & Benefits:</td><td style="padding:4px 0;">${offerDetails.benefits}</td></tr>` : ""}
+                    <tr><td style="padding:4px 0;color:#065F46;width:150px;">Offered Compensation:</td><td style="padding:4px 0;font-weight:700;">${escapeHtml(offerDetails.ctc)}</td></tr>
+                    <tr><td style="padding:4px 0;color:#065F46;">Proposed Joining Date:</td><td style="padding:4px 0;font-weight:600;">${escapeHtml(offerDetails.joiningDate || "Immediate / Flexible")}</td></tr>
+                    <tr><td style="padding:4px 0;color:#065F46;">Work Location:</td><td style="padding:4px 0;font-weight:600;">${escapeHtml(offerDetails.location || "Company HQ")}</td></tr>
+                    <tr><td style="padding:4px 0;color:#065F46;">Probation Period:</td><td style="padding:4px 0;">${escapeHtml(offerDetails.probationMonths || 3)} Months</td></tr>
+                    ${offerDetails.benefits ? `<tr><td style="padding:4px 0;color:#065F46;">Perks & Benefits:</td><td style="padding:4px 0;">${escapeHtml(offerDetails.benefits)}</td></tr>` : ""}
                 </table>
             </div>
         `;
@@ -184,11 +206,11 @@ export const buildEnterpriseEmailHTML = ({
                     🏛️ Onboarding & Joining Instructions
                 </div>
                 <table style="width:100%;font-size:14px;color:#1E293B;border-collapse:collapse;">
-                    <tr><td style="padding:4px 0;color:#166534;width:150px;">Official Joining Date:</td><td style="padding:4px 0;font-weight:700;">${joiningDetails.joiningDate}</td></tr>
-                    <tr><td style="padding:4px 0;color:#166534;">Reporting Time:</td><td style="padding:4px 0;font-weight:600;">${joiningDetails.reportingTime || "10:00 AM"}</td></tr>
-                    <tr><td style="padding:4px 0;color:#166534;">Reporting Manager:</td><td style="padding:4px 0;font-weight:600;">${joiningDetails.reportingManager || "HR & Engineering Lead"}</td></tr>
-                    <tr><td style="padding:4px 0;color:#166534;">Work Mode:</td><td style="padding:4px 0;">${joiningDetails.workMode || "Hybrid"}</td></tr>
-                    ${joiningDetails.documentsRequired ? `<tr><td style="padding:4px 0;color:#166534;">Documents to Bring:</td><td style="padding:4px 0;">${joiningDetails.documentsRequired}</td></tr>` : ""}
+                    <tr><td style="padding:4px 0;color:#166534;width:150px;">Official Joining Date:</td><td style="padding:4px 0;font-weight:700;">${escapeHtml(joiningDetails.joiningDate)}</td></tr>
+                    <tr><td style="padding:4px 0;color:#166534;">Reporting Time:</td><td style="padding:4px 0;font-weight:600;">${escapeHtml(joiningDetails.reportingTime || "10:00 AM")}</td></tr>
+                    <tr><td style="padding:4px 0;color:#166534;">Reporting Manager:</td><td style="padding:4px 0;font-weight:600;">${escapeHtml(joiningDetails.reportingManager || "HR & Engineering Lead")}</td></tr>
+                    <tr><td style="padding:4px 0;color:#166534;">Work Mode:</td><td style="padding:4px 0;">${escapeHtml(joiningDetails.workMode || "Hybrid")}</td></tr>
+                    ${joiningDetails.documentsRequired ? `<tr><td style="padding:4px 0;color:#166534;">Documents to Bring:</td><td style="padding:4px 0;">${escapeHtml(joiningDetails.documentsRequired)}</td></tr>` : ""}
                 </table>
             </div>
         `;
@@ -202,23 +224,23 @@ export const buildEnterpriseEmailHTML = ({
             <div style="max-width:620px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #E2E8F0;box-shadow:0 4px 12px rgba(15,23,42,0.04);">
                 <div style="background:linear-gradient(135deg,#6A38C2 0%,#4F46E5 100%);padding:24px 28px;color:#ffffff;display:flex;align-items:center;justify-content:space-between;">
                     <div>
-                        <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em;">${companyName}</div>
+                        <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em;">${safeCompanyName}</div>
                         <div style="font-size:12px;opacity:0.85;margin-top:2px;">Enterprise Talent Acquisition Portal</div>
                     </div>
                     <span style="display:inline-block;padding:6px 12px;border-radius:999px;background:${badgeColor};color:#ffffff;font-size:11px;font-weight:700;letter-spacing:0.05em;">
-                        ${badgeText}
+                        ${safeBadgeText}
                     </span>
                 </div>
 
                 <div style="padding:28px;">
-                    <h2 style="margin:0 0 18px 0;font-size:18px;color:#0F172A;">${subject}</h2>
+                    <h2 style="margin:0 0 18px 0;font-size:18px;color:#0F172A;">${safeSubject}</h2>
                     ${formattedBody}
                     ${extraCardHTML}
                 </div>
 
                 <div style="padding:18px 28px;background:#F8FAFC;border-top:1px solid #E2E8F0;font-size:12px;color:#64748B;">
-                    <div>Sent by <strong>${recruiterName}</strong> via <strong>JobPortal Enterprise ATS</strong></div>
-                    ${recruiterEmail ? `<div style="margin-top:4px;">Direct Reply-To: <a href="mailto:${recruiterEmail}" style="color:#6A38C2;">${recruiterEmail}</a></div>` : ""}
+                    <div>Sent by <strong>${safeRecruiterName}</strong> via <strong>JobPortal Enterprise ATS</strong></div>
+                    ${safeRecruiterEmail ? `<div style="margin-top:4px;">Direct Reply-To: <a href="mailto:${safeRecruiterEmail}" style="color:#6A38C2;">${safeRecruiterEmail}</a></div>` : ""}
                 </div>
             </div>
         </body>
@@ -227,7 +249,9 @@ export const buildEnterpriseEmailHTML = ({
 };
 
 /**
- * Dispatches the email with optional .ics calendar attachment or HTML letter attachment
+ * Dispatches the email with optional .ics calendar attachment or HTML letter attachment.
+ * If primary dispatch fails due to a transient network/SMTP error, automatically enqueues
+ * the email into `backgroundQueue` with Exponential Backoff + Dead-Letter Queue (DLQ).
  */
 export const sendEnterpriseEmail = async ({
     to,
@@ -240,52 +264,71 @@ export const sendEnterpriseEmail = async ({
     letterAttachmentHtml = null,
     letterAttachmentName = null
 }) => {
-    const { transporter, mode } = await getTransporter();
+    const dispatchOnce = async () => {
+        const { transporter, mode } = await getTransporter();
+        const fromAddress = process.env.SMTP_USER || "talent-acquisition@jobportal-ats.io";
+        const attachments = [];
 
-    const fromAddress = process.env.SMTP_USER || "talent-acquisition@jobportal-ats.io";
-    const attachments = [];
-
-    if (icsContent) {
-        attachments.push({
-            filename: "invite.ics",
-            content: icsContent,
-            contentType: "text/calendar; charset=utf-8; method=REQUEST"
-        });
-    }
-
-    if (letterAttachmentHtml && letterAttachmentName) {
-        attachments.push({
-            filename: letterAttachmentName,
-            content: letterAttachmentHtml,
-            contentType: "text/html; charset=utf-8"
-        });
-    }
-
-    const info = await transporter.sendMail({
-        from: `"${senderName}" <${fromAddress}>`,
-        to,
-        replyTo: replyTo || fromAddress,
-        subject,
-        text,
-        html,
-        attachments,
-        ...(icsContent ? {
-            icalEvent: {
+        if (icsContent) {
+            attachments.push({
                 filename: "invite.ics",
-                method: "request",
-                content: icsContent
-            }
-        } : {})
-    });
+                content: icsContent,
+                contentType: "text/calendar; charset=utf-8; method=REQUEST"
+            });
+        }
 
-    let previewUrl = "";
-    if (mode === "ethereal") {
-        previewUrl = nodemailer.getTestMessageUrl(info) || "";
-    }
+        if (letterAttachmentHtml && letterAttachmentName) {
+            attachments.push({
+                filename: letterAttachmentName,
+                content: letterAttachmentHtml,
+                contentType: "text/html; charset=utf-8"
+            });
+        }
 
-    return {
-        messageId: info.messageId,
-        deliveryMode: mode,
-        previewUrl
+        const info = await transporter.sendMail({
+            from: `"${senderName}" <${fromAddress}>`,
+            to,
+            replyTo: replyTo || fromAddress,
+            subject,
+            text,
+            html,
+            attachments,
+            ...(icsContent
+                ? {
+                      icalEvent: {
+                          filename: "invite.ics",
+                          method: "request",
+                          content: icsContent
+                      }
+                  }
+                : {})
+        });
+
+        let previewUrl = "";
+        if (mode === "ethereal") {
+            previewUrl = nodemailer.getTestMessageUrl(info) || "";
+        }
+
+        return {
+            messageId: info.messageId,
+            deliveryMode: mode,
+            previewUrl
+        };
     };
+
+    try {
+        return await dispatchOnce();
+    } catch (primaryErr) {
+        // Hand off to Background Retry Queue with Exponential Backoff + DLQ
+        const taskId = backgroundQueue.enqueue({
+            type: "EMAIL_DISPATCH_RETRY",
+            meta: { to, subject, senderName },
+            handler: dispatchOnce
+        });
+        return {
+            messageId: taskId,
+            deliveryMode: "queued-retry",
+            previewUrl: ""
+        };
+    }
 };

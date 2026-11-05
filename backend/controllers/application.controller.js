@@ -7,10 +7,26 @@ import {
     buildEnterpriseEmailHTML,
     sendEnterpriseEmail
 } from "../utils/mailer.js";
+import jobCache from "../utils/lruCache.js";
+import sseBroker from "../utils/sseBroker.js";
+import { withAcidTransaction } from "../utils/dbEngine.js";
+import { logAuditEvent } from "../models/auditLog.model.js";
+
+/**
+ * Helper: Creates a Notification in MongoDB AND immediately pushes it over SSE
+ * to all open browser tabs of the recipient in <10ms.
+ */
+const createAndPushNotification = async (notifData) => {
+    const notification = await Notification.create(notifData);
+    sseBroker.publishToUser(notifData.recipient, notification);
+    return notification;
+};
 
 /**
  * Candidate applies for a job
- * Creates the application record AND dispatches notifications to both Candidate and Recruiter
+ * - Wrapped in ACID transaction (with standalone fallback)
+ * - Protected by Unique Compound Index `{ job: 1, applicant: 1 }` against race conditions
+ * - Pushes real-time SSE alerts to both Candidate and Recruiter
  */
 export const applyJob = async (req, res) => {
     try {
@@ -43,19 +59,46 @@ export const applyJob = async (req, res) => {
 
         const applicantUser = await User.findById(userId);
 
-        const newApplication = await Application.create({
-            job: jobId,
-            applicant: userId,
-            status: "pending",
-            hiringStage: "applied",
-            coverNote: coverNote.trim()
+        let newApplication;
+        await withAcidTransaction(async (session) => {
+            if (session) {
+                const [created] = await Application.create(
+                    [
+                        {
+                            job: jobId,
+                            applicant: userId,
+                            status: "pending",
+                            hiringStage: "applied",
+                            coverNote: coverNote.trim()
+                        }
+                    ],
+                    { session }
+                );
+                newApplication = created;
+                await Job.findByIdAndUpdate(
+                    jobId,
+                    { $addToSet: { applications: newApplication._id } },
+                    { session }
+                );
+            } else {
+                newApplication = await Application.create({
+                    job: jobId,
+                    applicant: userId,
+                    status: "pending",
+                    hiringStage: "applied",
+                    coverNote: coverNote.trim()
+                });
+                await Job.findByIdAndUpdate(jobId, {
+                    $addToSet: { applications: newApplication._id }
+                });
+            }
         });
 
-        job.applications.push(newApplication._id);
-        await job.save();
+        // Invalidate cached job counts
+        jobCache.invalidateByPrefix("jobs:");
 
-        // 1. Confirmation notification for the Candidate
-        await Notification.create({
+        // 1. Confirmation notification for the Candidate (DB + Live SSE)
+        await createAndPushNotification({
             recipient: userId,
             application: newApplication._id,
             job: job._id,
@@ -64,9 +107,9 @@ export const applyJob = async (req, res) => {
             message: `Your application for ${job.title} at ${job.company?.name || "the company"} has been received and is pending review.`
         });
 
-        // 2. Real-time notification for the Recruiter who posted the job
+        // 2. Real-time notification for the Recruiter who posted the job (DB + Live SSE)
         if (job.created_by) {
-            await Notification.create({
+            await createAndPushNotification({
                 recipient: job.created_by,
                 sender: userId,
                 application: newApplication._id,
@@ -84,12 +127,32 @@ export const applyJob = async (req, res) => {
             });
         }
 
+        logAuditEvent({
+            req,
+            actorId: userId,
+            actorName: applicantUser?.fullname,
+            actorEmail: applicantUser?.email,
+            actorRole: "student",
+            action: "APPLICATION_SUBMITTED",
+            entityType: "Application",
+            entityId: newApplication._id,
+            status: "SUCCESS",
+            metadata: { jobId: job._id, jobTitle: job.title, company: job.company?.name }
+        });
+
         return res.status(201).json({
             message: "Job applied successfully.",
             application: newApplication,
             success: true
         });
     } catch (error) {
+        // Handle MongoDB E11000 Duplicate Key Error from Unique Compound Index `{ job: 1, applicant: 1 }`
+        if (error?.code === 11000) {
+            return res.status(409).json({
+                message: "You have already applied for this job.",
+                success: false
+            });
+        }
         console.log(error);
         return res.status(500).json({
             message: "Server error while applying for job.",
@@ -125,11 +188,28 @@ export const withdrawApplication = async (req, res) => {
             });
         }
 
-        await Job.findByIdAndUpdate(application.job, {
-            $pull: { applications: application._id }
+        await withAcidTransaction(async (session) => {
+            const opts = session ? { session } : {};
+            await Job.findByIdAndUpdate(
+                application.job,
+                { $pull: { applications: application._id } },
+                opts
+            );
+            await Application.findByIdAndDelete(application._id, opts);
         });
 
-        await Application.findByIdAndDelete(application._id);
+        jobCache.invalidateByPrefix("jobs:");
+
+        logAuditEvent({
+            req,
+            actorId: userId,
+            actorRole: "student",
+            action: "APPLICATION_WITHDRAWN",
+            entityType: "Application",
+            entityId: application._id,
+            status: "SUCCESS",
+            metadata: { jobId: application.job }
+        });
 
         return res.status(200).json({
             message: "Application withdrawn successfully.",
@@ -152,14 +232,16 @@ export const withdrawApplication = async (req, res) => {
 export const getAppliedJobs = async (req, res) => {
     try {
         const userId = req.id;
-        const application = await Application.find({ applicant: userId }).sort({ createdAt: -1 }).populate({
-            path: 'job',
-            options: { sort: { createdAt: -1 } },
-            populate: {
-                path: 'company',
+        const application = await Application.find({ applicant: userId })
+            .sort({ createdAt: -1 })
+            .populate({
+                path: "job",
                 options: { sort: { createdAt: -1 } },
-            }
-        });
+                populate: {
+                    path: "company",
+                    options: { sort: { createdAt: -1 } }
+                }
+            });
         if (!application) {
             return res.status(404).json({
                 message: "No Applications",
@@ -188,15 +270,16 @@ export const getApplicants = async (req, res) => {
         const job = await Job.findById(jobId)
             .populate("company")
             .populate({
-                path: 'applications',
+                path: "applications",
                 options: { sort: { createdAt: -1 } },
                 populate: {
-                    path: 'applicant'
+                    path: "applicant",
+                    select: "-password"
                 }
             });
         if (!job) {
             return res.status(404).json({
-                message: 'Job not found.',
+                message: "Job not found.",
                 success: false
             });
         }
@@ -222,7 +305,7 @@ export const updateStatus = async (req, res) => {
         const applicationId = req.params.id;
         if (!status) {
             return res.status(400).json({
-                message: 'Status is required',
+                message: "Status is required",
                 success: false
             });
         }
@@ -247,19 +330,33 @@ export const updateStatus = async (req, res) => {
         }
 
         await application.save();
+        jobCache.invalidateByPrefix("jobs:");
 
-        await Notification.create({
+        await createAndPushNotification({
             recipient: application.applicant?._id,
             sender: req.id,
             application: application._id,
             job: application.job?._id,
             type: normalized === "accepted" ? "shortlisted" : "rejected",
-            title: normalized === "accepted"
-                ? `Application Accepted: ${application.job?.title}`
-                : `Application Update: ${application.job?.title}`,
-            message: normalized === "accepted"
-                ? `Good news! ${application.job?.company?.name || "The recruiter"} has accepted and shortlisted your application for ${application.job?.title}.`
-                : `Thank you for your interest in ${application.job?.title} at ${application.job?.company?.name || "the company"}. The hiring team has updated your status.`
+            title:
+                normalized === "accepted"
+                    ? `Application Accepted: ${application.job?.title}`
+                    : `Application Update: ${application.job?.title}`,
+            message:
+                normalized === "accepted"
+                    ? `Good news! ${application.job?.company?.name || "The recruiter"} has accepted and shortlisted your application for ${application.job?.title}.`
+                    : `Thank you for your interest in ${application.job?.title} at ${application.job?.company?.name || "the company"}. The hiring team has updated your status.`
+        });
+
+        logAuditEvent({
+            req,
+            actorId: req.id,
+            actorRole: "recruiter",
+            action: "APPLICATION_STATUS_UPDATED",
+            entityType: "Application",
+            entityId: application._id,
+            status: "SUCCESS",
+            metadata: { newStatus: normalized, jobTitle: application.job?.title }
         });
 
         return res.status(200).json({
@@ -278,8 +375,6 @@ export const updateStatus = async (req, res) => {
 
 /**
  * Full Enterprise Hiring Workflow Action Endpoint
- * Handles sequential stages:
- * 1. shortlist -> 2. assignment -> 3. interview (.ics) -> 4. interview_passed -> 5. offer_letter -> 6. joining_letter -> 7. rejection
  */
 export const executeHiringStageAction = async (req, res) => {
     try {
@@ -347,7 +442,7 @@ export const executeHiringStageAction = async (req, res) => {
         } else if (actionType === "interview") {
             application.status = "accepted";
             application.hiringStage = "interview_scheduled";
-            const nextRound = Number(interviewDetails?.roundNumber || (application.currentRound + 1) || 1);
+            const nextRound = Number(interviewDetails?.roundNumber || application.currentRound + 1 || 1);
             application.currentRound = nextRound;
             application.interviewDetails = {
                 roundName: interviewDetails?.roundName || `Round ${nextRound} Interview`,
@@ -493,8 +588,9 @@ export const executeHiringStageAction = async (req, res) => {
         });
 
         await application.save();
+        jobCache.invalidateByPrefix("jobs:");
 
-        const notification = await Notification.create({
+        const notification = await createAndPushNotification({
             recipient: candidate?._id,
             sender: req.id,
             application: application._id,
@@ -511,6 +607,25 @@ export const executeHiringStageAction = async (req, res) => {
                 jobTitle: job?.title || "",
                 actionType,
                 ...metadataSnapshot
+            }
+        });
+
+        logAuditEvent({
+            req,
+            actorId: req.id,
+            actorName: recruiter?.fullname,
+            actorEmail: recruiter?.email,
+            actorRole: "recruiter",
+            action: `HIRING_STAGE_${String(actionType).toUpperCase()}`,
+            entityType: "Application",
+            entityId: application._id,
+            status: "SUCCESS",
+            metadata: {
+                candidateName: candidate?.fullname,
+                jobTitle: job?.title,
+                companyName,
+                hiringStage: application.hiringStage,
+                deliveryMode: emailResult.deliveryMode
             }
         });
 
@@ -532,7 +647,7 @@ export const executeHiringStageAction = async (req, res) => {
 };
 
 /**
- * Candidate submits assignment link + Notifies Recruiter
+ * Candidate submits assignment link + Notifies Recruiter via DB & Live SSE
  */
 export const submitCandidateAssignment = async (req, res) => {
     try {
@@ -559,9 +674,8 @@ export const submitCandidateAssignment = async (req, res) => {
 
         await application.save();
 
-        // Notify the Recruiter who posted the job
         if (application.job?.created_by) {
-            await Notification.create({
+            await createAndPushNotification({
                 recipient: application.job.created_by,
                 sender: req.id,
                 application: application._id,
@@ -579,6 +693,18 @@ export const submitCandidateAssignment = async (req, res) => {
             });
         }
 
+        logAuditEvent({
+            req,
+            actorId: req.id,
+            actorName: application.applicant?.fullname,
+            actorRole: "student",
+            action: "ASSIGNMENT_SUBMITTED",
+            entityType: "Application",
+            entityId: application._id,
+            status: "SUCCESS",
+            metadata: { jobTitle: application.job?.title, submissionLink: submissionLink.trim() }
+        });
+
         return res.status(200).json({
             success: true,
             message: "Assignment submitted successfully! The recruiter has been notified.",
@@ -592,12 +718,12 @@ export const submitCandidateAssignment = async (req, res) => {
 
 /**
  * Two-Way Offer Response Endpoint
- * Candidate digitally signs & Accepts or Declines Official Offer Letter + Notifies Recruiter
+ * Candidate digitally signs & Accepts or Declines Official Offer Letter + Notifies Recruiter via SSE
  */
 export const respondToOffer = async (req, res) => {
     try {
         const applicationId = req.params.id;
-        const { decision, signature = "", note = "" } = req.body; // decision: "accepted" | "declined"
+        const { decision, signature = "", note = "" } = req.body;
 
         if (!["accepted", "declined"].includes(decision)) {
             return res.status(400).json({
@@ -632,11 +758,11 @@ export const respondToOffer = async (req, res) => {
         }
 
         await application.save();
+        jobCache.invalidateByPrefix("jobs:");
 
-        // Notify the Recruiter immediately
         if (application.job?.created_by) {
             const isAccepted = decision === "accepted";
-            await Notification.create({
+            await createAndPushNotification({
                 recipient: application.job.created_by,
                 sender: req.id,
                 application: application._id,
@@ -659,11 +785,28 @@ export const respondToOffer = async (req, res) => {
             });
         }
 
+        logAuditEvent({
+            req,
+            actorId: req.id,
+            actorName: application.applicant?.fullname,
+            actorRole: "student",
+            action: decision === "accepted" ? "OFFER_ACCEPTED" : "OFFER_DECLINED",
+            entityType: "Application",
+            entityId: application._id,
+            status: "SUCCESS",
+            metadata: {
+                jobTitle: application.job?.title,
+                companyName: application.job?.company?.name,
+                signature: application.offerDetails.candidateSignature
+            }
+        });
+
         return res.status(200).json({
             success: true,
-            message: decision === "accepted"
-                ? "Congratulations! You have officially accepted the Offer Letter. The recruiter has been notified to issue your Joining Letter."
-                : "You have declined the offer. The recruiter has been notified.",
+            message:
+                decision === "accepted"
+                    ? "Congratulations! You have officially accepted the Offer Letter. The recruiter has been notified to issue your Joining Letter."
+                    : "You have declined the offer. The recruiter has been notified.",
             application
         });
     } catch (error) {

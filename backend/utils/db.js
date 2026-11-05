@@ -11,8 +11,8 @@ dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const DEFAULT_LOCAL_MONGO_URI = "mongodb://127.0.0.1:27017/jobportal";
 
-// Enforce Mongoose Query & Filter Security Globally
-mongoose.set("sanitizeFilter", true);
+// Enforce strict schema query paths (Note: HTTP input sanitization is handled by
+// mongoSanitizeAndXss middleware in security.js so internal $regex/$lt/$in queries work cleanly)
 mongoose.set("strictQuery", true);
 
 const resolveMongoUri = () => {
@@ -38,11 +38,13 @@ const connectDB = async () => {
     const uri = resolveMongoUri();
     try {
         await mongoose.connect(uri, {
-            maxPoolSize: 20,
-            serverSelectionTimeoutMS: 8000,
-            socketTimeoutMS: 45000
+            maxPoolSize: 25,
+            minPoolSize: 5,
+            serverSelectionTimeoutMS: 5000,
+            socketTimeoutMS: 45000,
+            autoIndex: true
         });
-        console.log("✅ MongoDB connected successfully (sanitizeFilter & strictQuery enabled)");
+        console.log("✅ MongoDB connected successfully (Connection Pool: 5-25, strictQuery & autoIndex enabled)");
         return true;
     } catch (error) {
         console.error("❌ MongoDB connection error:", error.message);

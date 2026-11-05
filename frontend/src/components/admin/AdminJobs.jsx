@@ -7,7 +7,7 @@ import { useDispatch, useSelector } from 'react-redux'
 import AdminJobsTable from './AdminJobsTable'
 import useGetAllAdminJobs from '@/hooks/useGetAllAdminJobs'
 import { setSearchJobByText } from '@/redux/jobSlice'
-import { Briefcase, Users, CheckCircle2, Clock, Plus } from 'lucide-react'
+import { Briefcase, Users, CheckCircle2, Clock, Plus, ShieldAlert, ArrowRight } from 'lucide-react'
 
 const AdminJobs = () => {
     useGetAllAdminJobs();
@@ -68,6 +68,29 @@ const AdminJobs = () => {
         <div className='min-h-screen bg-gray-50/40 pb-20'>
             <Navbar />
             <div className='max-w-6xl mx-auto px-4 sm:px-6 my-10 space-y-8'>
+
+                {/* Quick Banner to Launch Platform Headquarters (HQ) */}
+                <div className='bg-gradient-to-r from-slate-900 via-[#2e1065] to-slate-900 text-white p-5 rounded-3xl shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
+                    <div className='flex items-center gap-3.5'>
+                        <div className='w-11 h-11 rounded-2xl bg-white/10 flex items-center justify-center shrink-0'>
+                            <ShieldAlert className='w-5 h-5 text-[#F83002]' />
+                        </div>
+                        <div>
+                            <h2 className='font-extrabold text-sm sm:text-base'>Platform Headquarters (Maintainer & System Design HQ)</h2>
+                            <p className='text-xs text-slate-300'>
+                                View platform-wide Job Seeker vs. Recruiter graphs, 8-stage conversion funnels, LRU Cache hit ratios, P95 latency, and Immutable Security Audit Logs.
+                            </p>
+                        </div>
+                    </div>
+                    <Button
+                        type="button"
+                        onClick={() => navigate("/admin/hq")}
+                        className="rounded-xl bg-white text-slate-900 hover:bg-purple-50 font-bold text-xs h-10 px-4 shrink-0 cursor-pointer"
+                    >
+                        <span>Open Platform HQ</span>
+                        <ArrowRight className='w-3.5 h-3.5 ml-1.5' />
+                    </Button>
+                </div>
 
                 {/* Recruiter Analytics Dashboard */}
                 <div className='space-y-4'>
