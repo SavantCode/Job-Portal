@@ -1,0 +1,25 @@
+name: Render 24/7 Keep-Alive Cron
+
+on:
+  schedule:
+    # Runs every 14 minutes to prevent Render Free Tier 15-minute idle spin-down
+    - cron: "*/14 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping-render-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render Backend Health Endpoint
+        env:
+          RENDER_BACKEND_URL: ${{ secrets.RENDER_BACKEND_URL || vars.RENDER_BACKEND_URL }}
+        run: |
+          if [ -z "$RENDER_BACKEND_URL" ]; then
+            echo "Set RENDER_BACKEND_URL in GitHub Repository Variables (Settings -> Secrets and variables -> Actions -> Variables) e.g. https://your-backend.onrender.com"
+            exit 0
+          fi
+          TARGET="${RENDER_BACKEND_URL%/}/api/v1/health?source=keepalive-cron"
+          echo "Pinging $TARGET ..."
+          curl -fsSL --retry 2 --max-time 15 -H "X-Keep-Alive-Cron: true" "$TARGET"
+          echo ""
+          echo "Keep-alive ping succeeded at $(date -u)"

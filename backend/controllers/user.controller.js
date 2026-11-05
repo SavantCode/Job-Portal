@@ -20,6 +20,23 @@ const hasValidCloudinaryConfig = () => {
 };
 
 /**
+ * Resolves cookie options so authentication works seamlessly on both:
+ * - Localhost HTTP (`sameSite: "lax"`, `secure: false`)
+ * - Cross-domain Production HTTPS on Vercel + Render (`sameSite: "none"`, `secure: true`)
+ */
+const getAuthCookieOptions = (maxAgeMs) => {
+    const isProd =
+        process.env.NODE_ENV === "production" ||
+        Boolean(process.env.RENDER_EXTERNAL_URL);
+    return {
+        maxAge: maxAgeMs,
+        httpOnly: true,
+        sameSite: isProd ? "none" : "lax",
+        secure: isProd
+    };
+};
+
+/**
  * Strips password hash and formats user object for safe frontend Redux storage
  */
 const sanitizeUserPayload = (user) => ({
@@ -188,12 +205,7 @@ export const login = async (req, res) => {
 
         return res
             .status(200)
-            .cookie("token", token, {
-                maxAge: 24 * 60 * 60 * 1000,
-                httpOnly: true,
-                sameSite: "lax",
-                secure: process.env.NODE_ENV === "production"
-            })
+            .cookie("token", token, getAuthCookieOptions(24 * 60 * 60 * 1000))
             .json({
                 message: `Welcome back ${user.fullname}`,
                 user: sanitizeUserPayload(user),
@@ -212,7 +224,7 @@ export const logout = async (req, res) => {
     try {
         return res
             .status(200)
-            .cookie("token", "", { maxAge: 0, httpOnly: true, sameSite: "lax" })
+            .cookie("token", "", getAuthCookieOptions(0))
             .json({
                 message: "Logged out successfully.",
                 success: true
