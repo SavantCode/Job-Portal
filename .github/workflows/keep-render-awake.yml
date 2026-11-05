@@ -10,16 +10,19 @@ jobs:
   ping-render-backend:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Render Backend Health Endpoint
+      - name: Ping Render Backend Health Endpoint (Masked Secret)
         env:
           RENDER_BACKEND_URL: ${{ secrets.RENDER_BACKEND_URL || vars.RENDER_BACKEND_URL }}
         run: |
           if [ -z "$RENDER_BACKEND_URL" ]; then
-            echo "Set RENDER_BACKEND_URL in GitHub Repository Variables (Settings -> Secrets and variables -> Actions -> Variables) e.g. https://your-backend.onrender.com"
+            echo "RENDER_BACKEND_URL is not configured in GitHub Secrets."
             exit 0
           fi
           TARGET="${RENDER_BACKEND_URL%/}/api/v1/health?source=keepalive-cron"
-          echo "Pinging $TARGET ..."
-          curl -fsSL --retry 2 --max-time 15 -H "X-Keep-Alive-Cron: true" "$TARGET"
-          echo ""
-          echo "Keep-alive ping succeeded at $(date -u)"
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 5 --max-time 30 -H "X-Keep-Alive-Cron: true" "$TARGET")
+          echo "Keep-alive ping completed with HTTP status: $STATUS_CODE at $(date -u)"
+          if [ "$STATUS_CODE" -ge 200 ] && [ "$STATUS_CODE" -lt 400 ]; then
+            exit 0
+          else
+            exit 1
+          fi

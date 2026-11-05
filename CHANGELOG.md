@@ -1,55 +1,29 @@
 # Engineering Changelog, Resume Guide & Free Cloud Deployment Architecture
 
 This document contains:
-1. **Step-by-Step Free Cloud Deployment Guide (MongoDB Atlas + Render + Vercel + GitHub Actions Keep-Alive)**
-2. **Render 24/7 Keep-Alive Cron Architecture**
+1. **Live Production Deployment Links**
+2. **Step-by-Step GitHub Actions 24/7 Keep-Alive Cron Guide (Zero-Exposure Secret Mode)**
 3. **Ready-to-Copy Resume Bullet Points (XYZ Formula)**
 4. **Root-Cause Bug Audit & Fixes Applied**
 
 ---
 
-## 1. Step-by-Step Free Cloud Deployment Checklist
+## 1. Live Production Deployment Links
 
-### Step A: Push Code Safely to GitHub
-* A root `.gitignore` file is configured so `backend/.env`, `frontend/.env`, and `node_modules/` are never committed to Git.
-
-### Step B: Deploy Backend on Render (Free Web Service)
-1. Create a **New Web Service** on [Render](https://dashboard.render.com) connected to your GitHub repo.
-2. Set **Root Directory** = `backend`, **Build Command** = `npm install`, **Start Command** = `npm start`.
-3. Add Environment Variables:
-   * `NODE_ENV` = `production`
-   * `MONGO_URI` = *(MongoDB Atlas URI with Network Access `0.0.0.0/0`)*
-   * `SECRET_KEY` = *(Strong JWT secret)*
-   * `GROQ_API_KEY` = *(Your Groq key)*
-   * `GROQ_MODEL` = `openai/gpt-oss-20b`
-   * `CLOUD_NAME`, `API_KEY`, `API_SECRET` = *(Cloudinary credentials)*
-   * `SMTP_EMAIL`, `SMTP_PASSWORD` = *(Gmail App Password)*
-   * `FRONTEND_URL` = *(Your Vercel URL once deployed)*
-
-### Step C: Deploy Frontend on Vercel (Free)
-1. Import the repo on [Vercel](https://vercel.com/new) and set **Root Directory** = `frontend`.
-2. Add Environment Variable:
-   * `VITE_API_BASE_URL` = `https://<your-render-service>.onrender.com/api/v1`
-3. Deploy. `frontend/vercel.json` automatically rewrites SPA routes (`/(.*)` $\rightarrow$ `/index.html`) so refreshing `/jobs` or `/admin/hq` never 404s.
-
-### Step D: Enable External 24/7 Keep-Alive in GitHub Actions
-1. In your GitHub repo, go to **Settings $\rightarrow$ Secrets and variables $\rightarrow$ Actions $\rightarrow$ Variables**.
-2. Add `RENDER_BACKEND_URL` = `https://<your-render-service>.onrender.com`.
-3. `.github/workflows/keep-render-awake.yml` will ping `/api/v1/health?source=keepalive-cron` every 14 minutes from GitHub's runners.
+* **Live Frontend (Vercel CDN)**: `https://job-portal-ten-ivory-45.vercel.app`
+* **Live Platform Headquarters (Admin HQ)**: `https://job-portal-ten-ivory-45.vercel.app/admin/hq`
 
 ---
 
-## 2. Render 24/7 Keep-Alive Cron Architecture
+## 2. Step-by-Step GitHub Actions 24/7 Keep-Alive Cron Guide
 
-1. **In-Process Self-Ping Cron (`backend/utils/keepAliveCron.js`)**:
-   * Automatically detects Render's injected `RENDER_EXTERNAL_URL` (or `BACKEND_PUBLIC_URL`).
+### Dual-Layer Keep-Alive Architecture
+1. **Layer 1 — In-Process Self-Ping Cron (`backend/utils/keepAliveCron.js`)**:
+   * Automatically detects Render's injected `RENDER_EXTERNAL_URL` at runtime.
    * Executes every **13 minutes**, sending an outbound HTTP(S) `GET /api/v1/health?source=keepalive-cron` request AND pinging `mongoose.connection.db.admin().ping()` to keep both the Node.js process and MongoDB Atlas connection pool warm.
-   * Exposes live cron telemetry (`getKeepAliveStats()`) in `/api/v1/health` and `/api/v1/system/health`.
-2. **External GitHub Actions Cron (`.github/workflows/keep-render-awake.yml`)**:
-   * Runs every 14 minutes (`*/14 * * * *`) from GitHub's external runners to hit `${RENDER_BACKEND_URL}/api/v1/health?source=keepalive-cron`.
-3. **Production Proxy, CORS & Cross-Site Cookie Hardening**:
-   * Added `app.set("trust proxy", 1)` in `backend/index.js`.
-   * Updated `getAuthCookieOptions` in `backend/controllers/user.controller.js` to automatically switch to `sameSite: "none"` + `secure: true` in production so `httpOnly` JWT cookies work across Vercel (`*.vercel.app`) and Render (`*.onrender.com`).
+2. **Layer 2 — External GitHub Actions Cron (`.github/workflows/keep-render-awake.yml`)**:
+   * Runs every 14 minutes (`*/14 * * * *`) from GitHub's external Ubuntu runners.
+   * **Zero-Exposure Secret Mode**: Reads `${{ secrets.RENDER_BACKEND_URL }}` from GitHub Encrypted Secrets and uses `curl -s -o /dev/null -w "%{http_code}"` so the backend URL is never hardcoded in the repository or printed in public Action logs—only the HTTP status code (`200`) and UTC timestamp are logged.
 
 ---
 
@@ -72,3 +46,4 @@ This document contains:
 * **Bug 4 (TELEMETRY & DLQ METHODS):** Added `getDeadLetterItems()` to `BackgroundTaskQueue` and unified telemetry payloads across `backgroundQueue.js`, `lruCache.js`, `sseBroker.js`, and `security.js`.
 * **Bug 5 (RATE LIMITING & MULTIPART):** Removed duplicate `authLimiter` mounts from `backend/index.js` and placed `singleUpload` before `signupRateLimiter` on `/register`.
 * **Bug 6 (IDEMPOTENCY ACTOR RESOLUTION):** Updated `backend/middlewares/idempotency.js` with `resolveActorId(req)` to decode `userId` from the `token` cookie when `req.id` is not yet populated.
+* **Bug 7 (RENDER START SCRIPT):** Added `"start": "node index.js"` and `"seed": "node seed.js"` to `backend/package.json` so Render's default `npm start` command boots the Express server cleanly.
